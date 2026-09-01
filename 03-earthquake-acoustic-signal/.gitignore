@@ -1,0 +1,40 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Data artifacts
+data/raw/
+data/processed/*.duckdb
+data/processed/*.parquet
+
+# Model checkpoints
+models_store/*.pkl
+models_store/*.joblib
+models_store/*.pt
+models_store/*.ckpt
+
+# Reports (figures under reports/figures/ ARE committed as documentation assets)
+reports/oof_predictions.npz
+
+# Artefactos temporales de CatBoost
+catboost_info/
+
+# Environment / secrets
+.env
+.kaggle/
+kaggle.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+CLAUDE.md
+.claude/
