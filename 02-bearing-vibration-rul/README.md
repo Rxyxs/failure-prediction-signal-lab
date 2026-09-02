@@ -92,7 +92,7 @@ Metrics land in `outputs/bearing.duckdb` (table `dl_metrics`, additive to `model
 
 Python's `features.py` uses SciPy's FFT — the right tool for offline research, but not something an embedded vibration-monitoring device (the actual real-world deployment target for this kind of system) can run. `cpp/fft_features.cpp` reimplements the signal-processing hot-path from scratch: a radix-2 Cooley-Tukey FFT (in-place, iterative, no external library — same zero-dependency style as this portfolio's other C++ systems repos) plus RMS, kurtosis, dominant frequency, spectral entropy, and band-energy, matching the same formulas `features.py` uses.
 
-**Honest scoping note**: a radix-2 FFT requires a power-of-2 length, so both sides of the comparison truncate each 20,480-point snapshot to its first **16,384 points (2¹⁴)**, identically — not comparing different-length transforms. Verified against Python on 5 real snapshots (spanning the full sane→failed range of experiment 2): **max absolute difference 5.9×10⁻⁸** across all 5 features (RMS, kurtosis, dominant frequency, spectral entropy, band energy) — effectively bit-exact given the text-file I/O round-trip. Benchmark: **1,082 snapshots/second**, 924μs per snapshot (FFT of 16,384 points + full feature extraction) — this experiment only *needs* one snapshot every 10 minutes, so the hot-path has roughly 5 orders of magnitude of real-time headroom.
+**Honest scoping note**: a radix-2 FFT requires a power-of-2 length, so both sides of the comparison truncate each 20,480-point snapshot to its first **16,384 points (2¹⁴)**, identically — not comparing different-length transforms. Verified against Python on 5 real snapshots (spanning the full sane→failed range of experiment 2): **max absolute difference 5.9×10⁻⁸** across all 5 features (RMS, kurtosis, dominant frequency, spectral entropy, band energy) — effectively bit-exact given the text-file I/O round-trip. Benchmark (real run, MSVC `/O2`, this machine): **1,531 snapshots/second**, 653μs per snapshot (FFT of 16,384 points + full feature extraction) — this experiment only *needs* one snapshot every 10 minutes, so the hot-path has roughly 5 orders of magnitude of real-time headroom. Absolute throughput is hardware-dependent (an earlier run on different hardware measured ~1,082/s at 924μs); the 5.9×10⁻⁸ correctness figure is not.
 
 ```powershell
 python -m src.export_for_cpp   # regenerates cpp/snapshot_*.txt + python_reference.csv
@@ -113,6 +113,27 @@ python -m src.dl_pipeline                        # PyTorch MLP, ReLU/GELU/Swish 
 pytest tests/ -q                                 # 10/10 passing
 python -m src.cli --file path\to\snapshot.txt    # score a single real snapshot
 ```
+
+## Interactive: predicted vs. actual RUL fraction
+
+[**Open the interactive chart**](https://htmlpreview.github.io/?https://github.com/Rxyxs/failure-prediction-signal-lab/blob/main/02-bearing-vibration-rul/outputs/interactive/rul-fraction-predicted-vs-actual.html)
+— a Plotly scatter of predicted vs. actual `rul_fraction` for every real NASA
+IMS snapshot, colored by which experiment was held out, generated from a real
+GroupKFold leave-one-experiment-out run of CatBoost
+(`src/make_interactive_chart.py`) — same protocol as the Results table above
+(MAE ≈ 0.230 on that run; the exact value has some run-to-run variance from
+CatBoost's internal randomness even with a fixed seed, consistent with the
+baseline CatBoost row above).
+
+## Techniques used
+
+- **Signal processing** — time-domain (RMS, crest factor, kurtosis, skew) + FFT-based frequency-domain features (dominant frequency, spectral entropy, per-band energy)
+- **Gradient boosting** — LightGBM, CatBoost (winner), tuned with Optuna
+- **Classical baselines** — Ridge, Lasso, Random Forest
+- **Deep learning** — PyTorch MLP with a custom weighted-MAE loss, activation comparison (ReLU/GELU/Swish)
+- **Validation** — GroupKFold leave-one-experiment-out (3 independent physical rigs, no leakage)
+- **Real-time systems programming** — hand-rolled radix-2 Cooley-Tukey FFT in C++, zero dependencies, verified bit-exact against the Python/SciPy path
+- **Persistence** — DuckDB (`outputs/bearing.duckdb`)
 
 ## Stack
 

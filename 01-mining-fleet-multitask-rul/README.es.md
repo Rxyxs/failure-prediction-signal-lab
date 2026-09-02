@@ -59,6 +59,16 @@ en vez de **reactiva**.
 > despliegue productivo necesitaria cifras reales de costo-por-hora-de-parada
 > por faena para cuantificar el ROI con precision.
 
+## Tecnicas utilizadas
+
+- **Analisis de supervivencia** — CoxPH (`lifelines`) con datos censurados por la derecha (equipos aun operando)
+- **Regresion y clasificacion con gradient boosting** — LightGBM (modelo de produccion para RUL y tipo de falla)
+- **Deep learning** — red multi-task en PyTorch (tronco compartido, cabezas por tarea, embeddings categoricos), con early stopping
+- **Explicabilidad** — SHAP `TreeExplainer` (LightGBM) y `DeepExplainer` (PyTorch, split tronco+cabeza)
+- **Feature engineering** — estadisticos rolling con Polars, deltas, varianza acumulada, features FFT de vibracion
+- **Servicio** — FastAPI (auth por API-key, rate limiting) + dashboard Streamlit
+- **Persistencia de metricas** — DuckDB (historial consultable de comparacion de modelos y ablacion de activaciones)
+
 ## 🏗️ Arquitectura del sistema
 
 ```mermaid
@@ -597,6 +607,18 @@ etiqueta donde la perdida de validacion toca su minimo, cuadro a cuadro.
 | ALTO (< 1 mes) | 44 | 8.5% |
 | MEDIO (< 3 meses) | 65 | 12.5% |
 | BAJO (3+ meses) | 240 | 46.2% |
+
+## Interactivo: RUL predicho vs. real
+
+[**Abrir el grafico interactivo**](https://htmlpreview.github.io/?https://github.com/Rxyxs/failure-prediction-signal-lab/blob/main/01-mining-fleet-multitask-rul/outputs/interactive/rul-predicted-vs-actual.html)
+— un scatter Plotly de RUL predicho vs. real (horas) para cada unidad del
+holdout de LightGBM, con tooltip por `equipment_id`/`faena`, generado por una
+corrida real de `src/models/make_interactive_chart.py` sobre el mismo split
+a nivel de equipo usado en todo este README (MAE ≈ 521.7h en esa corrida,
+consistente con la fila de LightGBM de arriba — LightGBM tiene algo de
+variacion entre corridas ya que no esta tan estrictamente sembrado como para
+reproducir exactamente los 512.96h reportados; ambos son evaluaciones
+genuinas de holdout del mismo modelo/split).
 
 ## ✅ Conclusiones
 

@@ -185,6 +185,25 @@ Las metricas completas (incluyendo la loss de entrenamiento por epoca) se guarda
 `reports/activation_experiment.json` y en la tabla `activation_experiment` de
 `data/processed/features.duckdb`.
 
+## Interactivo: time_to_failure predicho vs. real
+
+[**Abrir el gráfico interactivo**](https://htmlpreview.github.io/?https://github.com/Rxyxs/failure-prediction-signal-lab/blob/main/03-earthquake-acoustic-signal/outputs/interactive/ttf-predicted-vs-actual.html)
+— un scatter Plotly de `time_to_failure` predicho vs. real, una traza por
+modelo, activable/desactivable desde la leyenda, construido directamente a
+partir de las predicciones out-of-fold reales (`reports/oof_predictions.npz`)
+generadas por la corrida `--n-splits 4` de arriba — el mismo arreglo del que
+sale `reports/figures/prediction_vs_actual.png`, solo que interactivo.
+
+## Técnicas utilizadas
+
+- **Feature engineering de señal** — estadísticas rodantes en el dominio temporal, PSD FFT/Welch, energía por banda del espectrograma, envolvente/fase vía transformada de Hilbert, entropía de Shannon, autocorrelación, conteo de picos sobre umbral
+- **Gradient boosting** — LightGBM y CatBoost, ambos optimizados con Optuna (sampler TPE)
+- **Baselines clásicos** — Ridge, Lasso, Random Forest
+- **Deep learning** — CNN 1D sobre la forma de onda cruda, más una ablación de función de activación (ReLU/GELU/Swish) con loss Huber ponderada custom
+- **Ensamble** — ensamble ponderado optimizado con NNLS sobre predicciones out-of-fold
+- **Validación** — GroupKFold sobre segmentos temporales
+- **Almacenamiento y servicio** — feature store en DuckDB, servicio de predicción FastAPI, CLI con Typer
+
 ## Estructura del proyecto
 
 ```
@@ -210,7 +229,8 @@ venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 
 # 2. Ejecutar el pipeline completo (datos sinteticos -> features -> entrenamiento -> reportes)
-python -m src.pipeline
+python -m src.pipeline --n-splits 4   # --n-splits 4 reproduce exactamente la tabla de Resultados;
+                                       # el default de la CLI (5) es una corrida valida, con numeros distintos
 
 # 3. Correr la suite de pruebas
 pytest

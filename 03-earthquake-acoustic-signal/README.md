@@ -174,6 +174,25 @@ segments, 6 epochs, `WeightedHuberLoss`):
 Full metrics (including per-epoch training loss) are persisted at `reports/activation_experiment.json`
 and in the `activation_experiment` table of `data/processed/features.duckdb`.
 
+## Interactive: predicted vs. actual time_to_failure
+
+[**Open the interactive chart**](https://htmlpreview.github.io/?https://github.com/Rxyxs/failure-prediction-signal-lab/blob/main/03-earthquake-acoustic-signal/outputs/interactive/ttf-predicted-vs-actual.html)
+— a Plotly scatter of predicted vs. actual `time_to_failure`, one trace per
+model, toggleable via the legend, built directly from the real out-of-fold
+predictions (`reports/oof_predictions.npz`) written by the `--n-splits 4` run
+above — the same array `reports/figures/prediction_vs_actual.png` is drawn
+from, just interactive.
+
+## Techniques used
+
+- **Signal feature engineering** — rolling time-domain statistics, FFT/Welch PSD, spectrogram band energy, Hilbert-transform envelope/phase, Shannon entropy, autocorrelation, threshold peak counts
+- **Gradient boosting** — LightGBM and CatBoost, both Optuna-tuned (TPE sampler)
+- **Classical baselines** — Ridge, Lasso, Random Forest
+- **Deep learning** — 1D CNN over the raw waveform, plus an activation-function ablation (ReLU/GELU/Swish) with a custom weighted Huber loss
+- **Ensembling** — NNLS-optimized weighted ensemble over out-of-fold predictions
+- **Validation** — GroupKFold over temporal segments
+- **Storage & serving** — DuckDB feature store, FastAPI prediction service, Typer CLI
+
 ## Project structure
 
 ```
@@ -199,7 +218,8 @@ venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 
 # 2. Run the full pipeline (synthetic data -> features -> training -> reports)
-python -m src.pipeline
+python -m src.pipeline --n-splits 4   # --n-splits 4 reproduces the Results table below exactly;
+                                       # the CLI default (5) is a valid, slightly different run
 
 # 3. Run the test suite
 pytest

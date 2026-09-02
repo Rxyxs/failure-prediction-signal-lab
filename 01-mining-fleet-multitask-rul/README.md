@@ -55,6 +55,16 @@ instead of **reactive**.
 > deployment would need real cost-per-downtime-hour figures per site to
 > quantify ROI precisely.
 
+## Techniques used
+
+- **Survival analysis** — CoxPH (`lifelines`) with right-censored data (units still operating)
+- **Gradient-boosted regression + classification** — LightGBM (production RUL + failure-type model)
+- **Deep learning** — PyTorch multi-task network (shared trunk, per-task heads, categorical embeddings), trained with early stopping
+- **Explainability** — SHAP `TreeExplainer` (LightGBM) and `DeepExplainer` (PyTorch, trunk+head split)
+- **Feature engineering** — Polars rolling statistics, deltas, cumulative variance, FFT-based vibration features
+- **Serving** — FastAPI (API-key auth, rate limiting) + Streamlit dashboard
+- **Metrics persistence** — DuckDB (queryable model-comparison and activation-ablation history)
+
 ## 🏗️ System Architecture
 
 ```mermaid
@@ -571,6 +581,17 @@ where validation loss bottoms out, frame by frame.
 | HIGH (< 1 month) | 44 | 8.5% |
 | MEDIUM (< 3 months) | 65 | 12.5% |
 | LOW (3+ months) | 240 | 46.2% |
+
+## Interactive: predicted vs. actual RUL
+
+[**Open the interactive chart**](https://htmlpreview.github.io/?https://github.com/Rxyxs/failure-prediction-signal-lab/blob/main/01-mining-fleet-multitask-rul/outputs/interactive/rul-predicted-vs-actual.html)
+— a Plotly scatter of predicted vs. actual RUL (hours) for every unit in the
+LightGBM holdout, hover-labeled by `equipment_id`/`faena`, generated from a
+real run of `src/models/make_interactive_chart.py` against the same
+equipment-level test split used everywhere else in this README (MAE ≈ 521.7h
+on that run, in line with the LightGBM row above — LightGBM has some
+run-to-run variance since it isn't seeded as tightly as the reported 512.96h
+figure, both are genuine holdout evaluations of the same model/split).
 
 ## ✅ Conclusions
 

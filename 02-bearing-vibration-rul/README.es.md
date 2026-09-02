@@ -92,7 +92,7 @@ Las métricas quedan en `outputs/bearing.duckdb` (tabla `dl_metrics`, aditiva a 
 
 `features.py` en Python usa la FFT de SciPy — la herramienta correcta para investigación offline, pero no algo que un dispositivo embebido de monitoreo de vibración (el destino de despliegue real de este tipo de sistema) pueda correr. `cpp/fft_features.cpp` reimplementa el hot-path de procesamiento de señal desde cero: una FFT radix-2 Cooley-Tukey (in-place, iterativa, sin ninguna librería externa — mismo estilo cero-dependencias de los otros repos de sistemas en C++ de este portafolio) más RMS, kurtosis, frecuencia dominante, entropía espectral y energía por banda, con las mismas fórmulas que usa `features.py`.
 
-**Nota honesta de alcance**: una FFT radix-2 requiere una longitud potencia de 2, así que ambos lados de la comparación truncan cada snapshot de 20.480 puntos a sus primeros **16.384 puntos (2¹⁴)**, de forma idéntica — no se comparan transformadas de distinta longitud. Verificado contra Python sobre 5 snapshots reales (que abarcan todo el rango sano→fallado del experimento 2): **diferencia absoluta máxima 5,9×10⁻⁸** en las 5 features (RMS, kurtosis, frecuencia dominante, entropía espectral, energía de banda) — efectivamente bit-exacto dado el round-trip de I/O por archivo de texto. Benchmark: **1.082 snapshots/segundo**, 924μs por snapshot (FFT de 16.384 puntos + extracción completa de features) — este experimento solo *necesita* un snapshot cada 10 minutos, así que el hot-path tiene aproximadamente 5 órdenes de magnitud de margen sobre el requerimiento real de tiempo real.
+**Nota honesta de alcance**: una FFT radix-2 requiere una longitud potencia de 2, así que ambos lados de la comparación truncan cada snapshot de 20.480 puntos a sus primeros **16.384 puntos (2¹⁴)**, de forma idéntica — no se comparan transformadas de distinta longitud. Verificado contra Python sobre 5 snapshots reales (que abarcan todo el rango sano→fallado del experimento 2): **diferencia absoluta máxima 5,9×10⁻⁸** en las 5 features (RMS, kurtosis, frecuencia dominante, entropía espectral, energía de banda) — efectivamente bit-exacto dado el round-trip de I/O por archivo de texto. Benchmark (corrida real, MSVC `/O2`, esta máquina): **1.531 snapshots/segundo**, 653μs por snapshot (FFT de 16.384 puntos + extracción completa de features) — este experimento solo *necesita* un snapshot cada 10 minutos, así que el hot-path tiene aproximadamente 5 órdenes de magnitud de margen sobre el requerimiento real de tiempo real. El throughput absoluto depende del hardware (una corrida anterior en otro equipo midió ~1.082/s a 924μs); la cifra de correctitud 5,9×10⁻⁸ no.
 
 ```powershell
 python -m src.export_for_cpp   # regenera cpp/snapshot_*.txt + python_reference.csv
@@ -113,6 +113,27 @@ python -m src.dl_pipeline                        # MLP PyTorch, comparacion ReLU
 pytest tests/ -q                                 # 10/10 passing
 python -m src.cli --file ruta\al\snapshot.txt    # scoring de un snapshot real
 ```
+
+## Interactivo: RUL fraccional predicho vs. real
+
+[**Abrir el gráfico interactivo**](https://htmlpreview.github.io/?https://github.com/Rxyxs/failure-prediction-signal-lab/blob/main/02-bearing-vibration-rul/outputs/interactive/rul-fraction-predicted-vs-actual.html)
+— un scatter Plotly de `rul_fraction` predicho vs. real para cada snapshot
+real de NASA IMS, coloreado por qué experimento quedó fuera, generado por una
+corrida real de GroupKFold leave-one-experiment-out con CatBoost
+(`src/make_interactive_chart.py`) — mismo protocolo que la tabla de
+Resultados de arriba (MAE ≈ 0,230 en esa corrida; el valor exacto tiene algo
+de variación entre corridas por la aleatoriedad interna de CatBoost incluso
+con semilla fija, consistente con la fila baseline de CatBoost de arriba).
+
+## Técnicas utilizadas
+
+- **Procesamiento de señal** — dominio temporal (RMS, crest factor, kurtosis, skew) + features de dominio frecuencial vía FFT (frecuencia dominante, entropía espectral, energía por banda)
+- **Gradient boosting** — LightGBM, CatBoost (ganador), afinado con Optuna
+- **Baselines clásicos** — Ridge, Lasso, Random Forest
+- **Deep learning** — MLP en PyTorch con loss custom de MAE ponderado, comparación de activaciones (ReLU/GELU/Swish)
+- **Validación** — GroupKFold leave-one-experiment-out (3 bancos físicos independientes, sin fuga)
+- **Programación de sistemas en tiempo real** — FFT radix-2 Cooley-Tukey hecha a mano en C++, cero dependencias, verificada bit-exacta contra el camino Python/SciPy
+- **Persistencia** — DuckDB (`outputs/bearing.duckdb`)
 
 ## Stack
 
