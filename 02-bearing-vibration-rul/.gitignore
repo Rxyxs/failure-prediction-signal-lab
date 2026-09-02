@@ -12,6 +12,3 @@ outputs/reports/*
 *.duckdb
 cpp/*.exe
 cpp/*.obj
-
-CLAUDE.md
-.claude/

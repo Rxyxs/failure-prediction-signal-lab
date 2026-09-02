@@ -26,6 +26,3 @@ data/raw/*
 .vscode/
 .idea/
 .DS_Store
-
-CLAUDE.md
-.claude/
