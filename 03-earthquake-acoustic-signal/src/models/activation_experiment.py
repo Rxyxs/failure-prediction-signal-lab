@@ -13,6 +13,7 @@ Autor: Pablo Reyes
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -20,7 +21,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from src.config import TrainingConfig
-from src.models.cnn_model import SignalDataset
+from src.models.cnn_model import SignalDataset, fit_with_early_stopping
 
 ACTIVATIONS: dict[str, type[nn.Module]] = {
     "relu": nn.ReLU,
@@ -100,6 +101,8 @@ class ActivationRunResult:
     activation: str
     val_mae: float
     epoch_losses: list[float] = field(default_factory=list)
+    val_losses: list[float] = field(default_factory=list)
+    best_epoch: int = 0
 
 
 def train_with_activation(
@@ -111,34 +114,17 @@ def train_with_activation(
     config: TrainingConfig,
     loss_fn: nn.Module | None = None,
     device: str = "cpu",
+    checkpoint_path: Path | None = None,
 ) -> ActivationRunResult:
-    """Entrena ``CNN1DActivation`` con la activacion indicada y una loss custom."""
+    """Entrena ``CNN1DActivation`` con la activacion indicada y una loss custom,
+    con el protocolo comun (``fit_with_early_stopping``); ``val_signals`` solo
+    se usa para el MAE final."""
     input_length = train_signals.shape[1]
     model = CNN1DActivation(input_length=input_length, activation=activation).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.cnn_learning_rate)
     criterion = loss_fn if loss_fn is not None else WeightedHuberLoss()
-
-    train_loader = DataLoader(
-        SignalDataset(train_signals, train_targets),
-        batch_size=config.cnn_batch_size,
-        shuffle=True,
-    )
-
-    epoch_losses: list[float] = []
-    model.train()
-    for _epoch in range(config.cnn_epochs):
-        running_loss = 0.0
-        n_batches = 0
-        for batch_x, batch_y in train_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            optimizer.zero_grad()
-            preds = model(batch_x)
-            loss = criterion(preds, batch_y)
-            loss.backward()
-            optimizer.step()
-            running_loss += float(loss.item())
-            n_batches += 1
-        epoch_losses.append(running_loss / max(n_batches, 1))
+    history = fit_with_early_stopping(model, criterion, train_signals, train_targets, config, device=device,
+                                      checkpoint_path=checkpoint_path)
+    epoch_losses = history["train_loss"]
 
     model.eval()
     with torch.no_grad():
@@ -146,7 +132,8 @@ def train_with_activation(
         val_preds = model(val_x).squeeze(-1).cpu().numpy()
 
     mae = float(np.mean(np.abs(val_preds - val_targets)))
-    return ActivationRunResult(activation=activation, val_mae=mae, epoch_losses=epoch_losses)
+    return ActivationRunResult(activation=activation, val_mae=mae, epoch_losses=epoch_losses,
+                               val_losses=history["val_loss"], best_epoch=history["best_epoch"])
 
 
 def run_activation_comparison(
@@ -157,6 +144,7 @@ def run_activation_comparison(
     config: TrainingConfig,
     activations: tuple[str, ...] = ("relu", "gelu", "swish"),
     device: str = "cpu",
+    checkpoint_dir: Path | None = None,
 ) -> dict[str, ActivationRunResult]:
     """Entrena la CNN con cada activacion en ``activations`` y retorna sus resultados."""
     results: dict[str, ActivationRunResult] = {}
@@ -165,6 +153,7 @@ def run_activation_comparison(
         # inicializacion aleatoria de cada corrida.
         torch.manual_seed(config.random_seed)
         results[activation] = train_with_activation(
-            train_signals, train_targets, val_signals, val_targets, activation, config, device=device
+            train_signals, train_targets, val_signals, val_targets, activation, config, device=device,
+            checkpoint_path=None if checkpoint_dir is None else Path(checkpoint_dir) / f"cnn_{activation}.ckpt",
         )
     return results
