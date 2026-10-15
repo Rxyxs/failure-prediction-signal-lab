@@ -78,13 +78,23 @@ CatBoost wins with the lowest std across folds too — the most *consistent* gen
 
 `python -m src.dl_pipeline` adds a small MLP (`src/dl_model.py`, 2 hidden layers + dropout, sigmoid output for RUL fraction) trained with a **custom weighted-MAE loss** that penalizes errors more heavily near end-of-life (`weight = 1 + 2*(1 - target)`) — a wrong prediction at RUL≈0 is more expensive in real predictive maintenance than the same absolute error at RUL≈0.9. Evaluated with the exact same protocol as every other model here: 3-fold GroupKFold leave-one-experiment-out, same features, same `rul_fraction` target, so the numbers are directly comparable.
 
-| Activation | MAE (mean ± std across 3 folds) |
-|---|---:|
-| **GELU** | **0.296 ± 0.011** |
-| ReLU | 0.321 ± 0.052 |
-| Swish (SiLU) | 0.326 ± 0.031 |
+| Activation | MAE (mean ± std across 3 folds) | Best epoch per fold |
+|---|---:|---:|
+| **Swish (SiLU)** | **0.392 ± 0.039** | 579 / 386 / 482 |
+| GELU | 0.437 ± 0.037 | 606 / 366 / 910 |
+| ReLU | 0.443 ± 0.043 | 284 / 595 / 561 |
 
-GELU has both the lowest MAE and by far the lowest std — the smoothest, most consistent activation across the 3 physically independent rigs. Honest disclosure: the tree ensembles still win overall (CatBoost 0.208 vs. MLP-GELU 0.296) — with ~3,150 snapshots and only 3 validation groups, gradient-boosted trees on hand-engineered spectral features out-generalize a from-scratch MLP here, which is a legitimate and common outcome on small tabular signal-feature datasets.
+**Training protocol.** Inside each fold, validation for early stopping comes from the two *training* rigs: each rig is cut into blocks of 20 consecutive snapshots and 15% of the blocks are held out (whole blocks, because neighbouring snapshots 10 minutes apart are almost identical). The held-out rig is used only for the MAE. Each network trains at least 100 full-batch epochs (at most 2,000), then early stopping ends the run after 50 epochs without improvement and restores the best epoch; the state is checkpointed every 10 epochs so an interrupted run resumes.
+
+**What training longer revealed.** The previous version trained a fixed 80 epochs and reported GELU 0.296. Trained to convergence on the training rigs, every activation gets *worse* on the unseen rig (0.39-0.44). A fixed-epoch sweep scored on the held-out rigs (`python -m src.dl_epoch_sweep`) shows why:
+
+| Epochs (fixed) | GELU | Swish | ReLU |
+|---:|---:|---:|---:|
+| 80 | 0.269 | 0.290 | 0.308 |
+| 200 | 0.260 | 0.268 | 0.338 |
+| converged (early stopping) | 0.437 | 0.392 | 0.443 |
+
+The error on an unseen rig is lowest somewhere around 80-200 epochs and then grows, while validation loss measured on the training rigs keeps improving for hundreds of epochs. The network keeps learning things that are specific to the two rigs it sees, and validation drawn from those same rigs cannot detect it. Picking 80 or 200 epochs from this table would mean choosing with the test rig, so the converged run is the one reported, and the sweep stays a diagnostic. With three rigs there is no clean way out: holding out a whole rig for validation would leave a single rig to train on. The tree ensembles remain clearly better (CatBoost 0.208), and this result is the reason they are the model of record here.
 
 Metrics land in `outputs/bearing.duckdb` (table `dl_metrics`, additive to `model_metrics`) and `outputs/reports/dl_activation_comparison.{csv,json,png}`.
 
