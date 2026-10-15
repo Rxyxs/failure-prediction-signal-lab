@@ -13,7 +13,10 @@ Ejecutar desde la raiz del repositorio con:
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
+from pathlib import Path
 
 import joblib
 import numpy as np
@@ -38,6 +41,20 @@ EQUIPMENT_TYPE_TO_IDX = {name: i for i, name in enumerate(EQUIPMENT_TYPES)}
 FAENA_TO_IDX = {name: i for i, name in enumerate(FAENAS)}
 FAILURE_TYPE_TO_IDX = {name: i for i, name in enumerate(FAILURE_TYPES)}
 RUL_SCALE_HOURS = 1000.0  # normaliza el target de RUL para balancear ambas perdidas
+
+MIN_EPOCHS = 100   # ninguna red se detiene antes de 100 epocas
+MAX_EPOCHS = 300
+PATIENCE = 15
+VAL_FRACTION = 0.15  # fraccion de los equipos de train reservada para validacion
+
+
+def _fingerprint(*tensors: torch.Tensor, **config) -> str:
+    h = hashlib.sha256()
+    for t in tensors:
+        h.update(np.ascontiguousarray(t.numpy(), dtype=np.float32).tobytes())
+    h.update(json.dumps(config, sort_keys=True).encode())
+    return h.hexdigest()[:16]
+
 
 ACTIVATIONS: dict[str, type[nn.Module]] = {
     "relu": nn.ReLU,
@@ -134,21 +151,38 @@ def train_multi_task_model(
     mt_df: pl.DataFrame,
     train_ids: set[str],
     test_ids: set[str],
-    epochs: int = 60,
+    epochs: int = MAX_EPOCHS,
     batch_size: int = 256,
     lr: float = 1e-3,
     classification_loss_weight: float = 1.0,
     seed: int = 42,
     activation: str = "relu",
-    patience: int = 10,
+    patience: int = PATIENCE,
+    min_epochs: int = MIN_EPOCHS,
+    checkpoint_path: Path | None = None,
 ) -> tuple[MultiTaskDegradationNet, StandardScaler, dict]:
+    """Entrena la red multi-task. La validacion para early stopping es un
+    ``VAL_FRACTION`` de los *equipos* de train (todas sus lecturas juntas), nunca
+    el test: antes se usaba el propio holdout de test para decidir cuando parar.
+    Al menos ``min_epochs`` epocas (o ``epochs`` si es menor); desde ahi corta
+    tras ``patience`` epocas sin mejora y restaura la mejor epoca. Con
+    ``checkpoint_path`` el estado completo se guarda cada epoca y una corrida
+    interrumpida retoma donde quedo."""
     torch.manual_seed(seed)
 
-    train_df = mt_df.filter(pl.col("equipment_id").is_in(train_ids))
+    rng = np.random.default_rng(seed)
+    ordered_train = sorted(train_ids)
+    n_val = max(1, int(round(len(ordered_train) * VAL_FRACTION)))
+    val_ids = set(rng.choice(ordered_train, size=n_val, replace=False).tolist())
+    fit_ids = set(ordered_train) - val_ids
+
+    train_df = mt_df.filter(pl.col("equipment_id").is_in(fit_ids))
+    val_df = mt_df.filter(pl.col("equipment_id").is_in(val_ids))
     test_df = mt_df.filter(pl.col("equipment_id").is_in(test_ids))
 
     scaler = StandardScaler()
     train_t = _to_tensors(train_df, scaler, fit_scaler=True)
+    val_t = _to_tensors(val_df, scaler, fit_scaler=False)
     test_t = _to_tensors(test_df, scaler, fit_scaler=False)
 
     model = MultiTaskDegradationNet(n_numeric_features=len(NUMERIC_COLUMNS), activation=activation)
@@ -160,25 +194,48 @@ def train_multi_task_model(
         train_t["numeric"], train_t["equipment_type_idx"], train_t["faena_idx"], train_t["failure_idx"], train_t["rul_scaled"]
     )
     # drop_last evita que un ultimo batch de tamano 1 rompa BatchNorm en modo train.
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-
+    generator = torch.Generator()
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, generator=generator)
     n_batches = len(train_loader)
-    loss_history: dict[str, list[float]] = {
-        "epoch": [], "train_total": [], "train_rul_mse": [], "train_cls_ce": [],
-        "val_total": [], "val_rul_mse": [], "val_cls_ce": [],
+
+    fp = _fingerprint(train_t["numeric"], val_t["numeric"], activation=activation, epochs=epochs,
+                      batch_size=batch_size, lr=lr, w=classification_loss_weight, seed=seed,
+                      patience=patience, min_epochs=min_epochs)
+    state = {
+        "epoch": 0,
+        "loss_history": {"epoch": [], "train_total": [], "train_rul_mse": [], "train_cls_ce": [],
+                         "val_total": [], "val_rul_mse": [], "val_cls_ce": []},
+        "best_val": float("inf"), "best_epoch": 0, "best_state": None, "bad_epochs": 0, "done": False,
     }
-    best_val_total = float("inf")
-    best_epoch = 0
-    best_state = None
-    bad_epochs = 0
-    for epoch in range(epochs):
+    if checkpoint_path is not None and Path(checkpoint_path).exists():
+        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if ckpt.get("fingerprint") == fp:
+            model.load_state_dict(ckpt["model"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            state = ckpt["state"]
+            print(f"  retomando desde el checkpoint en la epoca {state['epoch']}")
+
+    def save_checkpoint() -> None:
+        if checkpoint_path is None:
+            return
+        path = Path(checkpoint_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        torch.save({"fingerprint": fp, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "state": state}, tmp)
+        tmp.replace(path)
+
+    loss_history = state["loss_history"]
+    while not state["done"] and state["epoch"] < epochs:
+        generator.manual_seed(seed + state["epoch"])  # mismo orden de batches al retomar
+        torch.manual_seed(seed + 10_000 + state["epoch"])
         model.train()
         epoch_total, epoch_rul, epoch_cls = 0.0, 0.0, 0.0
-        for x_num, eq_idx, faena_idx, fail_idx, rul_scaled in train_loader:
+        for numeric, eq_idx, faena_idx, failure_idx, rul_scaled in train_loader:
             optimizer.zero_grad()
-            rul_pred, failure_logits = model(x_num, eq_idx, faena_idx)
+            rul_pred, failure_logits = model(numeric, eq_idx, faena_idx)
             rul_component = mse_loss(rul_pred, rul_scaled)
-            cls_component = ce_loss(failure_logits, fail_idx)
+            cls_component = ce_loss(failure_logits, failure_idx)
             loss = rul_component + classification_loss_weight * cls_component
             loss.backward()
             optimizer.step()
@@ -188,15 +245,17 @@ def train_multi_task_model(
         epoch_total /= max(n_batches, 1)
         epoch_rul /= max(n_batches, 1)
         epoch_cls /= max(n_batches, 1)
+        state["epoch"] += 1
+        epoch = state["epoch"]
 
         model.eval()
         with torch.no_grad():
-            val_rul_pred, val_failure_logits = model(test_t["numeric"], test_t["equipment_type_idx"], test_t["faena_idx"])
-            val_rul_component = mse_loss(val_rul_pred, test_t["rul_scaled"]).item()
-            val_cls_component = ce_loss(val_failure_logits, test_t["failure_idx"]).item()
+            val_rul_pred, val_failure_logits = model(val_t["numeric"], val_t["equipment_type_idx"], val_t["faena_idx"])
+            val_rul_component = mse_loss(val_rul_pred, val_t["rul_scaled"]).item()
+            val_cls_component = ce_loss(val_failure_logits, val_t["failure_idx"]).item()
             val_total = val_rul_component + classification_loss_weight * val_cls_component
 
-        loss_history["epoch"].append(epoch + 1)
+        loss_history["epoch"].append(epoch)
         loss_history["train_total"].append(epoch_total)
         loss_history["train_rul_mse"].append(epoch_rul)
         loss_history["train_cls_ce"].append(epoch_cls)
@@ -204,22 +263,25 @@ def train_multi_task_model(
         loss_history["val_rul_mse"].append(val_rul_component)
         loss_history["val_cls_ce"].append(val_cls_component)
 
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"  epoch {epoch + 1}/{epochs} - loss train: {epoch_total:.4f} | loss val: {val_total:.4f}")
+        if epoch % 10 == 0 or epoch == 1:
+            print(f"  epoch {epoch}/{epochs} - loss train: {epoch_total:.4f} | loss val: {val_total:.4f}")
 
-        if val_total < best_val_total:
-            best_val_total = val_total
-            best_epoch = epoch + 1
-            best_state = {k: v.clone() for k, v in model.state_dict().items()}
-            bad_epochs = 0
+        if val_total < state["best_val"] - 1e-7:
+            state.update(best_val=val_total, best_epoch=epoch, bad_epochs=0,
+                         best_state=copy.deepcopy(model.state_dict()))
         else:
-            bad_epochs += 1
-            if bad_epochs >= patience:
-                print(f"  early stopping en epoch {epoch + 1} (sin mejora en val_total por {patience} epochs; mejor: epoch {best_epoch})")
-                break
+            state["bad_epochs"] += 1
+        if epoch >= min(min_epochs, epochs) and state["bad_epochs"] >= patience:
+            state["done"] = True
+            print(f"  early stopping en epoch {epoch} (sin mejora en val_total por {patience} epochs; "
+                  f"mejor: epoch {state['best_epoch']})")
+        save_checkpoint()
 
-    if best_state is not None:
-        model.load_state_dict(best_state)
+    best_epoch = state["best_epoch"]
+    if state["best_state"] is not None:
+        model.load_state_dict(state["best_state"])
+    state["done"] = True
+    save_checkpoint()
 
     model.eval()
     with torch.no_grad():
@@ -234,6 +296,8 @@ def train_multi_task_model(
         "accuracy_failure_type": float(accuracy_score(failure_true_idx, failure_pred_idx)),
         "f1_macro_failure_type": float(f1_score(failure_true_idx, failure_pred_idx, average="macro")),
         "n_train_rows": train_df.height,
+        "n_val_rows": val_df.height,
+        "n_val_equipment": len(val_ids),
         "n_test_rows": test_df.height,
         "activation": activation,
         "loss_history": loss_history,
@@ -259,11 +323,13 @@ def main() -> None:
     train_ids, test_ids = equipment_train_test_split(failed_ids, test_size=0.25, seed=42)
 
     print(f"Entrenando red multi-task (PyTorch) sobre {mt_df.height} lecturas de {len(failed_ids)} equipos fallados...")
-    model, scaler, metrics = train_multi_task_model(mt_df, train_ids, test_ids)
+    model, scaler, metrics = train_multi_task_model(
+        mt_df, train_ids, test_ids, checkpoint_path=MODELS_DIR / "checkpoints" / "multi_task_relu.ckpt"
+    )
 
     print(
         f"\n[Multi-task PyTorch] Early stopping: mejor epoch {metrics['best_epoch']}"
-        f"{' (detenido antes de los 60)' if metrics['early_stopped'] else ' (corrio los 60 completos)'}"
+        f"{f' (detenido antes de las {MAX_EPOCHS})' if metrics['early_stopped'] else f' (corrio las {MAX_EPOCHS} completas)'}"
     )
     print(f"[Multi-task PyTorch] MAE RUL: {metrics['mae_rul_hours']:.1f} horas")
     print(

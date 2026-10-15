@@ -13,6 +13,8 @@ Ejecutar desde la raiz del repositorio con:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import json
 
 import polars as pl
@@ -20,10 +22,12 @@ import polars as pl
 from src.models.metrics_db import persist_activation_comparison
 from src.models.multi_task_net import (
     ACTIVATIONS,
+    MAX_EPOCHS,
     build_multi_task_table,
     train_multi_task_model,
 )
 from src.models.train_survival_pipeline import (
+    MODELS_DIR,
     PROCESSED_DIR,
     equipment_train_test_split,
 )
@@ -33,8 +37,9 @@ def run_activation_comparison(
     mt_df: pl.DataFrame,
     train_ids: set[str],
     test_ids: set[str],
-    epochs: int = 60,
+    epochs: int = MAX_EPOCHS,
     seed: int = 42,
+    checkpoint_dir: Path | None = None,
 ) -> dict[str, dict]:
     """Entrena una variante de la red por cada activacion en `ACTIVATIONS`.
 
@@ -47,7 +52,8 @@ def run_activation_comparison(
     for activation_name in ACTIVATIONS:
         print(f"Entrenando red multi-task con activacion '{activation_name}'...")
         _, _, metrics = train_multi_task_model(
-            mt_df, train_ids, test_ids, epochs=epochs, seed=seed, activation=activation_name
+            mt_df, train_ids, test_ids, epochs=epochs, seed=seed, activation=activation_name,
+            checkpoint_path=None if checkpoint_dir is None else checkpoint_dir / f"multi_task_{activation_name}.ckpt",
         )
         # El historial de loss por epoca infla mucho el JSON de comparacion;
         # se conserva solo en el metrics.json principal via multi_task_net.py.
@@ -69,7 +75,7 @@ def main() -> None:
     failed_ids = mt_df["equipment_id"].unique().to_list()
     train_ids, test_ids = equipment_train_test_split(failed_ids, test_size=0.25, seed=42)
 
-    results = run_activation_comparison(mt_df, train_ids, test_ids)
+    results = run_activation_comparison(mt_df, train_ids, test_ids, checkpoint_dir=MODELS_DIR / "checkpoints")
 
     out_path = PROCESSED_DIR / "activation_comparison.json"
     with open(out_path, "w", encoding="utf-8") as f:

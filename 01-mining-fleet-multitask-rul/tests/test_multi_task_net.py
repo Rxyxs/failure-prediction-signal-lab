@@ -36,3 +36,34 @@ def test_train_multi_task_model_produces_finite_metrics(multi_task_table):
     assert 0.0 <= metrics["f1_macro_failure_type"] <= 1.0
     assert metrics["n_train_rows"] > 0
     assert metrics["n_test_rows"] > 0
+
+
+def test_validation_is_carved_from_train_equipment_and_resume_works(multi_task_table, tmp_path, monkeypatch):
+    import pytest
+    import torch
+
+    ids = sorted(multi_task_table["equipment_id"].unique().to_list())
+    train_ids, test_ids = set(ids[: int(len(ids) * 0.75)]), set(ids[int(len(ids) * 0.75):])
+    kwargs = dict(epochs=5, min_epochs=5, patience=100, batch_size=32)
+    _, _, ref = train_multi_task_model(multi_task_table, train_ids, test_ids, **kwargs)
+    assert ref["n_val_equipment"] >= 1
+    assert ref["n_val_rows"] > 0
+
+    ckpt = tmp_path / "mt.ckpt"
+    real_step = torch.optim.Adam.step
+    calls = {"n": 0}
+
+    def flaky_step(self, *args, **kw):
+        calls["n"] += 1
+        if calls["n"] > 3:
+            raise KeyboardInterrupt
+        return real_step(self, *args, **kw)
+
+    monkeypatch.setattr(torch.optim.Adam, "step", flaky_step)
+    with pytest.raises(KeyboardInterrupt):
+        train_multi_task_model(multi_task_table, train_ids, test_ids, checkpoint_path=ckpt, **kwargs)
+    monkeypatch.setattr(torch.optim.Adam, "step", real_step)
+
+    _, _, resumed = train_multi_task_model(multi_task_table, train_ids, test_ids, checkpoint_path=ckpt, **kwargs)
+    assert resumed["loss_history"]["val_total"] == pytest.approx(ref["loss_history"]["val_total"], rel=1e-5)
+    assert resumed["mae_rul_hours"] == pytest.approx(ref["mae_rul_hours"], rel=1e-5)

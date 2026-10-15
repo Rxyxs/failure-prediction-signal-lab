@@ -46,7 +46,7 @@ en vez de **reactiva**.
 | Clasificacion de tipo de falla | Indica **que** componente probablemente fallara (rodamiento, hidraulico, termico, estructural, electrico), no solo *cuando* | Tiempo medio de reparacion (MTTR), stock correcto de repuestos |
 | Survival analysis (CoxPH) | Ordena el riesgo relativo de toda la flota, incluyendo unidades que aun no han fallado (datos censurados) | Priorizacion de mantenimiento entre cientos de unidades |
 | Explicabilidad SHAP | Convierte una prediccion en un diagnostico que un mecanico puede verificar contra las lecturas reales de sensores | Confianza y adopcion por parte de los ingenieros de faena, no una caja negra |
-| Ranking de supervivencia CoxPH | C-Index 0,6246 en holdout, incluye unidades censuradas (aun no falladas) | Priorizacion de riesgo a nivel de flota, no solo predicciones puntuales sobre unidades ya falladas |
+| Ranking de supervivencia CoxPH | C-Index 0,6247 en holdout, incluye unidades censuradas (aun no falladas) | Priorizacion de riesgo a nivel de flota, no solo predicciones puntuales sobre unidades ya falladas |
 
 > **Sobre las cifras en dolares:** la parada no planificada de un CAEX o un
 > chancador primario es citada ampliamente en la literatura de la industria
@@ -430,9 +430,10 @@ comparativas (inserciones append-only, claves planas y anidadas de
 Metricas de la corrida por defecto (520 equipos, seed 42, holdout 25% de
 equipos fallados para RUL/clasificacion y 25% de todos los equipos para
 supervivencia). El loop de entrenamiento de `multi_task_net.py` usa early
-stopping sobre la perdida de validacion combinada (patience 10) desde esta
-actualizacion — todas las corridas de PyTorch abajo guardan el mejor epoch
-en vez de correr los 60 epochs fijos hasta el final (ver la nota de "Early
+stopping sobre la perdida de validacion combinada, medida en equipos de
+entrenamiento (al menos 100 epocas, patience 15) — todas las corridas de
+PyTorch abajo restauran su mejor epoca en vez de correr los 60 epochs fijos
+hasta el final (ver la nota de "Early
 stopping" justo despues de la tabla).
 
 **Lee esto antes de la tabla, no despues**: el Accuracy/F1 de clasificacion
@@ -444,7 +445,7 @@ misma tarea. LightGBM clasifica solo la **ultima lectura de cada equipo**
 falla ya es practicamente legible en los sensores. PyTorch clasifica
 **cada lectura individual** de telemetria, incluyendo lecturas tempranas con
 degradacion apenas perceptible — una tarea genuinamente mas dificil, por eso
-su accuracy (0.744) es menor aun siendo un modelo razonable. La comparacion
+su accuracy (0.726) es menor aun siendo un modelo razonable. La comparacion
 de RUL justo arriba, en cambio, *si* es directa (mismo holdout, misma
 etiqueta para ambos modelos). El puntaje perfecto de la fila de
 clasificacion es un resultado real y reproducible de una definicion de
@@ -454,22 +455,28 @@ ella en vez de omitirse.
 
 | Modelo | Tarea | Metrica | Valor |
 |---|---|---|---|
-| CoxPH (lifelines) | Supervivencia con censura | C-Index (holdout) | **0.6246** |
-| LightGBM | RUL (regresion) | MAE (holdout) | 512.96 h |
+| CoxPH (lifelines) | Supervivencia con censura | C-Index (holdout) | **0.6247** |
+| LightGBM | RUL (regresion) | MAE (holdout) | **525.7 h** |
 | LightGBM | Tipo de falla (clasificacion, ultima lectura) | Accuracy / F1-macro | **1.000 / 1.000** |
-| PyTorch multi-task (ReLU, early-stopped) | RUL (regresion) | MAE (holdout) | **499.2 h** |
-| PyTorch multi-task (ReLU, early-stopped) | Tipo de falla (clasificacion, *cada* lectura) | Accuracy / F1-macro | 0.744 / 0.730 |
+| PyTorch multi-task (ReLU, early-stopped) | RUL (regresion) | MAE (holdout) | 530.0 h |
+| PyTorch multi-task (ReLU, early-stopped) | Tipo de falla (clasificacion, *cada* lectura) | Accuracy / F1-macro | 0.726 / 0.709 |
 
-**El early stopping cambio la conclusion sobre RUL — documentado
-honestamente en vez de dejarlo desactualizado.** Las dos filas de arriba
-antes mostraban a PyTorch perdiendo en RUL (592.31h vs. los 512.96h de
-LightGBM) bajo una corrida fija de 60 epochs. El diagnostico de curva de
-perdida (abajo, y en `02_PyTorch_MultiTask_DeepSHAP.ipynb`) mostro que esa
-corrida sobreajustaba pasado el epoch ~7, asi que `train_multi_task_model`
-ahora se detiene sobre la perdida de validacion combinada (patience 10,
-restaurando el checkpoint del mejor epoch). Reentrenado desde cero con ese
-cambio, el MAE de RUL de ReLU baja a **499.2h — ya mejor que LightGBM** —
-sin tocar la arquitectura, los datos ni el holdout.
+**El early stopping sobre el test hacia ver a PyTorch mejor de lo que es —
+corregido aqui.** Una version anterior de esta tabla mostraba a la red
+multi-task superando a LightGBM en RUL (499.2h vs. 512.96h). Ese numero venia
+de un early stopping que miraba el holdout de *test* para decidir cuando
+parar, asi que el holdout era parte del entrenamiento. `train_multi_task_model`
+ahora separa una validacion de los *equipos* de entrenamiento (15% de las
+unidades de train, todas sus lecturas juntas, 22 unidades) y nunca mira las
+unidades de test hasta la evaluacion final. Cada red entrena al menos 100
+epocas (maximo 300); desde ahi, early stopping corta cuando la perdida de
+validacion no mejora en 15 epocas y restaura la mejor epoca, y el estado
+completo se guarda en un checkpoint cada epoca para retomar una corrida
+interrumpida. La perdida de validacion toca su minimo en la **epoca 8**, asi
+que cada corrida se detiene justo despues del minimo de 100 epocas y
+devuelve los pesos de la epoca 8. Con ese protocolo honesto, el MAE de RUL de
+ReLU es **530.0h**, levemente peor que los 525.7h de LightGBM sobre el mismo
+holdout y la misma corrida.
 
 **Ablacion de activaciones** (`python -m src.models.activation_comparison`,
 misma arquitectura `MultiTaskDegradationNet`, mismo holdout, semilla y regla
@@ -478,59 +485,53 @@ tronco):
 
 | Activacion | MAE RUL (holdout) | Accuracy falla | F1-macro falla | Mejor epoch |
 |---|---|---|---|---|
-| ReLU (linea base, usada arriba) | 499.2 h | 0.744 | 0.730 | 7 |
-| GELU | 491.9 h | 0.741 | 0.723 | 7 |
-| **Swish (SiLU)** | **468.6 h** | **0.744** | 0.726 | 7 |
+| ReLU (linea base, usada arriba) | 530.0 h | 0.726 | 0.709 | 8 |
+| **GELU** | **503.4 h** | 0.734 | 0.718 | 8 |
+| Swish (SiLU) | 508.1 h | **0.735** | **0.720** | 8 |
 
-Las tres activaciones ahora superan el MAE de RUL de LightGBM (512.96h) una
-vez que el early stopping entra en juego, y Swish gana directamente tanto en
-MAE de RUL como en accuracy de clasificacion de falla — una reversion
-genuina respecto a la comparacion anterior de epochs fijos, no una
-re-corrida hasta que el numero se viera mejor (misma semilla, mismo holdout
-25%, misma arquitectura; solo cambio la regla de parada). Las tres siguen
-deteniendose en el epoch 7 — el punto de sobreajuste no depende de la
-activacion, solo de esta combinacion de dataset/arquitectura. Las tres
-corridas quedan persistidas en `data/processed/metrics.duckdb` (tabla
-`activation_comparison`) para un registro consultable, no solo esta tabla
-estatica.
+Con la validacion separada de las unidades de test, las tres activaciones
+quedan a menos de 27h entre si y rodean los 525.7h de LightGBM: GELU (503.4h)
+y Swish (508.1h) le ganan por 3-4%, ReLU (530.0h) pierde por 1%. Es un margen
+mucho menor que el que sugeria la tabla anterior, ajustada sobre el test
+(Swish 468.6h), y con una validacion de 22 unidades esta dentro del ruido de
+elegir otra semilla u otro split. Las tres se detienen en la epoca 8: el
+punto de sobreajuste depende de este dataset/arquitectura, no de la
+activacion. Las tres corridas quedan persistidas en
+`data/processed/metrics.duckdb` (tabla `activation_comparison`).
 
-**Que significa esto para la eleccion de produccion**: LightGBM sigue
-siendo mas simple de servir, mas rapido de entrenar, y sigue ganando
-directamente en clasificacion de tipo de falla (1.000 vs. la tarea mas
-dificil por lectura de PyTorch a 0.744) — asi que sigue siendo el default
-de produccion en este repo. Pero "PyTorch pierde en RUL" ya no es una razon
-correcta para preferir LightGBM: era un artefacto de entrenar mas alla del
-punto de sobreajuste, no una propiedad de la arquitectura. Promover
-Swish-con-early-stopping a produccion seria una eleccion defendible solo
-por MAE de RUL — no se hace aqui, porque el resultado de clasificacion de
-LightGBM y su simplicidad operacional siguen inclinando la balanza general,
-pero el argumento de RUL-solo para LightGBM especificamente ya no aplica.
+**Que significa esto para la eleccion de produccion**: LightGBM es mas
+simple de servir, mas rapido de entrenar, gana directamente en clasificacion
+de tipo de falla (1.000 vs. la tarea mas dificil por lectura de PyTorch a
+0.726) y empata con la red en RUL — asi que sigue siendo el default de
+produccion en este repo. La ventaja de la red en RUL, medida con honestidad,
+es de unos pocos puntos porcentuales en dos de tres activaciones y no basta
+por si sola para justificar el cambio.
 
 **Top features SHAP para RUL** (`shap_rul_importance.csv`):
 
 | # | Feature | Mean \|SHAP\| |
 |---|---|---|
-| 1 | `operating_hours` | 721.7 |
-| 2 | `vibration_roll_mean_med` | 653.0 |
-| 3 | `engine_temp_roll_mean_med` | 648.7 |
-| 4 | `fuel_consumption_roll_mean_med` | 312.6 |
-| 5 | `hydraulic_pressure_roll_mean_med` | 261.7 |
-| 6 | `rpm_roll_std_med` | 141.1 |
-| 7 | `vibration_cum_var` | 112.2 |
-| 8 | `age_years` | 98.2 |
+| 1 | `operating_hours` | 704.4 |
+| 2 | `engine_temp_roll_mean_med` | 667.9 |
+| 3 | `vibration_roll_mean_med` | 647.9 |
+| 4 | `fuel_consumption_roll_mean_med` | 302.9 |
+| 5 | `hydraulic_pressure_roll_mean_med` | 253.2 |
+| 6 | `rpm_roll_std_med` | 148.7 |
+| 7 | `vibration_cum_var` | 107.7 |
+| 8 | `age_years` | 92.5 |
 
 **Top features SHAP para tipo de falla** (`shap_failure_classifier_importance.csv`):
 
 | # | Feature | Mean \|SHAP\| |
 |---|---|---|
-| 1 | `vibration_roll_mean_short` | 1.245 |
-| 2 | `hydraulic_pressure_roll_mean_med` | 1.177 |
-| 3 | `vibration_cum_var` | 0.926 |
-| 4 | `engine_temp_roll_mean_med` | 0.703 |
-| 5 | `vibration_roll_mean_med` | 0.516 |
-| 6 | `engine_temp_roll_mean_short` | 0.307 |
-| 7 | `engine_temp_delta_long` | 0.203 |
-| 8 | `age_years` | 0.132 |
+| 1 | `vibration_roll_mean_short` | 1.219 |
+| 2 | `hydraulic_pressure_roll_mean_med` | 1.178 |
+| 3 | `vibration_cum_var` | 0.931 |
+| 4 | `engine_temp_roll_mean_med` | 0.709 |
+| 5 | `vibration_roll_mean_med` | 0.522 |
+| 6 | `engine_temp_roll_mean_short` | 0.308 |
+| 7 | `engine_temp_delta_long` | 0.187 |
+| 8 | `age_years` | 0.141 |
 
 Coherente con el diseño del generador: vibracion domina (rodamiento/falla
 estructural) junto con presion hidraulica (fuga hidraulica) y temperatura
@@ -544,27 +545,27 @@ embeddings categoricos sumados de vuelta a una sola fila cada uno):
 
 | # | Feature | Mean \|SHAP\| |
 |---|---|---|
-| 1 | `operating_hours` | 1.088 |
-| 2 | `fuel_consumption_roll_mean_med` | 0.843 |
-| 3 | `vibration_roll_mean_med` | 0.835 |
-| 4 | `equipment_type` | 0.689 |
-| 5 | `engine_temp_roll_mean_med` | 0.490 |
-| 6 | `hydraulic_pressure_roll_mean_med` | 0.289 |
-| 7 | `rpm_roll_std_med` | 0.167 |
-| 8 | `faena` | 0.083 |
+| 1 | `operating_hours` | 1.234 |
+| 2 | `fuel_consumption_roll_mean_med` | 0.982 |
+| 3 | `equipment_type` | 0.824 |
+| 4 | `vibration_roll_mean_med` | 0.670 |
+| 5 | `engine_temp_roll_mean_med` | 0.460 |
+| 6 | `vibration_roll_mean_short` | 0.394 |
+| 7 | `hydraulic_pressure_roll_mean_med` | 0.358 |
+| 8 | `rpm_roll_std_med` | 0.240 |
 
 **Top features DeepSHAP para tipo de falla** (`shap_multitask_failure_importance.csv`):
 
 | # | Feature | Mean \|SHAP\| |
 |---|---|---|
-| 1 | `vibration_roll_mean_med` | 2.543 |
-| 2 | `engine_temp_roll_mean_med` | 2.168 |
-| 3 | `hydraulic_pressure_roll_mean_med` | 1.738 |
-| 4 | `age_years` | 0.955 |
-| 5 | `fuel_consumption_roll_mean_med` | 0.940 |
-| 6 | `equipment_type` | 0.777 |
-| 7 | `operating_hours` | 0.709 |
-| 8 | `faena` | 0.535 |
+| 1 | `vibration_roll_mean_med` | 1.840 |
+| 2 | `engine_temp_roll_mean_med` | 1.760 |
+| 3 | `vibration_roll_mean_short` | 1.430 |
+| 4 | `hydraulic_pressure_roll_mean_med` | 1.259 |
+| 5 | `operating_hours` | 0.792 |
+| 6 | `fuel_consumption_roll_mean_med` | 0.590 |
+| 7 | `engine_temp_roll_mean_short` | 0.514 |
+| 8 | `faena` | 0.399 |
 
 **El ranking de DeepSHAP coincide con el ranking de TreeSHAP de LightGBM
 sobre la misma fisica**, calculado por un explicador completamente distinto
@@ -585,9 +586,10 @@ impulsado casi por completo por la cabeza de clasificacion (cross-entropy
 de validacion subiendo mientras la de entrenamiento seguia bajando; el MSE
 de validacion de la cabeza de RUL se mantenia casi plano en comparacion).
 `multitask_pdm.py` ahora entrena con early stopping sobre la perdida de
-validacion (patience 10) en vez de las antiguas 60 epocas fijas: esta
-corrida se detuvo en la **epoca 17**, restauro el checkpoint de la **epoca
-7** (perdida de validacion 1,534, vs. 1,799 al momento de detenerse), y ese
+validacion en vez de las antiguas 60 epocas fijas, con una validacion de
+equipos de entrenamiento (nunca las unidades de test): esta corrida entreno
+el minimo de 100 epocas, restauro el checkpoint de la **epoca 8** (perdida
+de validacion 1,277, vs. 2,148 en la epoca 100), y ese
 es el checkpoint efectivamente guardado en `multi_task_net.pt` y reportado
 en la tabla de Resultados de arriba. La curva de perdida de abajo ahora
 muestra esa corrida real con early stopping, no la antigua de 60 epocas.
@@ -617,7 +619,7 @@ corrida real de `src/models/make_interactive_chart.py` sobre el mismo split
 a nivel de equipo usado en todo este README (MAE ≈ 521.7h en esa corrida,
 consistente con la fila de LightGBM de arriba — LightGBM tiene algo de
 variacion entre corridas ya que no esta tan estrictamente sembrado como para
-reproducir exactamente los 512.96h reportados; ambos son evaluaciones
+reproducir exactamente los 525.7h reportados; ambos son evaluaciones
 genuinas de holdout del mismo modelo/split).
 
 ## ✅ Conclusiones
@@ -627,7 +629,7 @@ genuinas de holdout del mismo modelo/split).
   simulacion relacional (censura de datos incluida) hasta un servicio de
   scoring autenticado y un dashboard operacional, todo entrenado, evaluado
   y validado con tests sobre las mismas 520 unidades.
-- **CoxPH aporta lo que LightGBM no puede**: un C-Index de 0.6246 es modesto
+- **CoxPH aporta lo que LightGBM no puede**: un C-Index de 0.6247 es modesto
   pero consistente — separa razonablemente el riesgo relativo entre
   equipos con datos censurados (aun operando), algo que un regresor
   puntual no maneja de forma nativa. Es la pieza correcta para la pregunta
@@ -642,14 +644,14 @@ genuinas de holdout del mismo modelo/split).
   hidraulica, temperatura → motor). Esto es lo que hace que el modelo sea
   *auditable* por un mecanico, no una caja negra.
 - **La comparacion LightGBM vs. PyTorch multi-task fue una decision basada
-  en evidencia, no en preferencia — y la evidencia cambio al corregir un
-  bug real (falta de early stopping).** Bajo el entrenamiento original de
-  epocas fijas, PyTorch perdia en MAE de RUL; con early stopping, gana
-  (499.2h vs. los 512.96h de LightGBM, ver "Resultados"). LightGBM se
-  mantiene en produccion aqui porque sigue ganando en clasificacion de tipo
-  de falla y es mas simple de servir, no porque siga ganando en RUL — esa
-  justificacion especifica ya no aplica, y este README lo dice en vez de
-  dejar el numero desactualizado en silencio.
+  en evidencia, y la evidencia hubo que limpiarla dos veces.** Con el
+  entrenamiento original de epocas fijas, PyTorch perdia en MAE de RUL
+  (592,31h). Agregar early stopping ayudo, pero la primera version se
+  detenia mirando el holdout de test y exageraba la ganancia (499,2h). Con
+  la validacion tomada solo de equipos de entrenamiento, las dos familias de
+  modelos empatan en RUL (GELU 503,4h, ReLU 530,0h, LightGBM 525,7h en la
+  misma corrida). LightGBM se mantiene en produccion porque gana en
+  clasificacion de tipo de falla y es mas simple de servir.
 - **La red PyTorch tambien es completamente explicable y servible, no solo
   comparada y archivada**: `multitask_pdm.py` construye explicadores
   DeepSHAP reales (`shap.DeepExplainer` sobre un split tronco+cabeza que
@@ -659,15 +661,13 @@ genuinas de holdout del mismo modelo/split).
   el TreeSHAP de LightGBM — dos explicadores distintos, dos familias de
   modelo distintas, una sola historia consistente.
 - **El analisis de curvas de perdida encontro un problema real de
-  sobreajuste que las metricas de la ultima epoca por si solas escondian —
-  y corregirlo cambio la conclusion sobre RUL.** La perdida de validacion
-  tocaba su minimo alrededor de la epoca 7 y subia el resto de la antigua
-  corrida fija de 60 epocas, concentrado en la cabeza de clasificacion.
-  Agregar early stopping (patience 10) a `multi_task_net.py` y reentrenar
-  lo confirmo: el MAE de RUL bajo de 592,31h a 499,2h (ReLU) — suficiente
-  para que PyTorch pase de perder contra los 512,96h de LightGBM a
-  superarlo. Ver "Resultados" arriba para el antes/despues completo y la
-  ablacion de activaciones re-corrida bajo la misma correccion.
+  sobreajuste que las metricas de la ultima epoca por si solas escondian.**
+  La perdida de validacion toca su minimo alrededor de la epoca 8 y sube el
+  resto de la corrida, concentrado en la cabeza de clasificacion. El early
+  stopping sobre una validacion correcta (solo equipos de entrenamiento, al
+  menos 100 epocas, patience 15) baja el MAE de RUL de 592,31h (60 epocas
+  fijas) a 503-530h segun la activacion — suficiente para que la red empate
+  con LightGBM, no para superarlo con claridad. Ver "Resultados" arriba.
 - **Limitacion central, y la mas importante de nombrar**: todo el dataset es
   sintetico (fallas Weibull, sensores simulados). Las metricas muestran que
   el *pipeline* es correcto — arquitectura, splits sin fuga, features,

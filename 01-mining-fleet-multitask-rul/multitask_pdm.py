@@ -225,7 +225,9 @@ def main() -> None:
     train_ids, test_ids = equipment_train_test_split(failed_ids, test_size=0.25, seed=42)
 
     print(f"Entrenando red multi-task (PyTorch) sobre {mt_df.height} lecturas de {len(failed_ids)} equipos fallados...")
-    model, scaler, metrics = train_multi_task_model(mt_df, train_ids, test_ids)
+    model, scaler, metrics = train_multi_task_model(
+        mt_df, train_ids, test_ids, checkpoint_path=MODELS_DIR / "checkpoints" / "multi_task_relu.ckpt"
+    )
     loss_history = metrics.pop("loss_history")
 
     print(f"\n[Multi-task PyTorch] MAE RUL: {metrics['mae_rul_hours']:.1f} horas")
