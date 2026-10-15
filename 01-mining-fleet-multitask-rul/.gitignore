@@ -18,6 +18,7 @@ data/processed/*.json
 data/processed/*.duckdb
 data/processed/models/*.joblib
 data/processed/models/*.pt
+data/processed/models/checkpoints/
 !data/processed/.gitkeep
 data/raw/*
 !data/raw/.gitkeep
