@@ -58,3 +58,47 @@ def test_evaluate_activations_group_kfold_runs_end_to_end_on_synthetic_data():
     assert set(results["model"]) == {"mlp_relu", "mlp_gelu", "mlp_swish"}
     assert (results["mae_mean"] >= 0).all()
     assert (results["mae_mean"] <= 1.5).all()
+
+
+def test_validation_mask_uses_contiguous_blocks_from_every_group():
+    from src.dl_model import VAL_BLOCK, validation_mask
+
+    groups = np.repeat(["a", "b"], 200)
+    mask = validation_mask(groups)
+    for g in ("a", "b"):
+        m = mask[groups == g]
+        assert 0.05 < m.mean() < 0.3
+        starts = np.flatnonzero(np.diff(np.r_[0, m.astype(int)]) == 1)
+        assert all(s % VAL_BLOCK == 0 for s in starts)  # cada tramo empieza en un borde de bloque
+
+
+def test_fold_training_respects_minimum_and_resumes_from_checkpoint(tmp_path, monkeypatch):
+    import pytest
+
+    from src.dl_model import _train_one_fold
+
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(120, 5)).astype(np.float32)
+    y = rng.uniform(0, 1, size=120).astype(np.float32)
+    kw = dict(X_val=X[90:], y_val=y[90:], epochs=40, min_epochs=40, patience=1000, return_info=True)
+    ref_mae, ref = _train_one_fold(X[:90], y[:90], X[100:], y[100:], "gelu", **kw)
+    assert ref["epochs_run"] == 40
+
+    ckpt = tmp_path / "f.ckpt"
+    real_step = torch.optim.Adam.step
+    calls = {"n": 0}
+
+    def flaky_step(self, *args, **k):
+        calls["n"] += 1
+        if calls["n"] > 25:  # corta en la epoca 26; el ultimo checkpoint es la 20
+            raise KeyboardInterrupt
+        return real_step(self, *args, **k)
+
+    monkeypatch.setattr(torch.optim.Adam, "step", flaky_step)
+    with pytest.raises(KeyboardInterrupt):
+        _train_one_fold(X[:90], y[:90], X[100:], y[100:], "gelu", checkpoint_path=ckpt, **kw)
+    monkeypatch.setattr(torch.optim.Adam, "step", real_step)
+
+    mae, info = _train_one_fold(X[:90], y[:90], X[100:], y[100:], "gelu", checkpoint_path=ckpt, **kw)
+    assert info["val_loss"] == pytest.approx(ref["val_loss"], rel=1e-5)
+    assert mae == pytest.approx(ref_mae, rel=1e-5)

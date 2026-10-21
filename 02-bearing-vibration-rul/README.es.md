@@ -78,13 +78,23 @@ CatBoost gana también con la menor desviación entre folds — el generalizador
 
 `python -m src.dl_pipeline` agrega un MLP chico (`src/dl_model.py`, 2 capas ocultas + dropout, salida sigmoid para RUL fraccional) entrenado con una **loss custom de MAE ponderado** que penaliza más el error cerca del fin de vida útil (`peso = 1 + 2*(1 - target)`) — una predicción errada en RUL≈0 es más costosa en mantenimiento predictivo real que el mismo error absoluto en RUL≈0,9. Evaluado con exactamente el mismo protocolo que el resto del proyecto: 3-fold GroupKFold leave-one-experiment-out, mismas features, mismo target `rul_fraction`, para que los números sean directamente comparables.
 
-| Activación | MAE (promedio ± std entre 3 folds) |
-|---|---:|
-| **GELU** | **0,296 ± 0,011** |
-| ReLU | 0,321 ± 0,052 |
-| Swish (SiLU) | 0,326 ± 0,031 |
+| Activación | MAE (promedio ± std entre 3 folds) | Mejor época por fold |
+|---|---:|---:|
+| **Swish (SiLU)** | **0,392 ± 0,039** | 579 / 386 / 482 |
+| GELU | 0,437 ± 0,037 | 606 / 366 / 910 |
+| ReLU | 0,443 ± 0,043 | 284 / 595 / 561 |
 
-GELU tiene el MAE más bajo y también, por lejos, la menor desviación estándar — la activación más consistente entre los 3 bancos físicamente independientes. Divulgación honesta: los ensambles de árboles siguen ganando en general (CatBoost 0,208 vs. MLP-GELU 0,296) — con ~3.150 snapshots y solo 3 grupos de validación, gradient boosting sobre features espectrales manuales generaliza mejor aquí que un MLP entrenado desde cero, un resultado legítimo y común en datasets tabulares chicos de features de señal.
+**Protocolo de entrenamiento.** Dentro de cada fold, la validación para el early stopping sale de los dos bancos de *entrenamiento*: cada banco se corta en bloques de 20 snapshots consecutivos y un 15% de los bloques se reserva (bloques enteros, porque dos snapshots vecinos separados por 10 minutos son casi idénticos). El banco de test solo se usa para el MAE. Cada red entrena al menos 100 épocas full-batch (máximo 2.000); desde ahí, early stopping corta tras 50 épocas sin mejora y restaura la mejor época, y el estado se guarda en un checkpoint cada 10 épocas para retomar una corrida interrumpida.
+
+**Lo que reveló entrenar más.** La versión anterior entrenaba 80 épocas fijas y reportaba GELU 0,296. Entrenadas hasta converger en los bancos de entrenamiento, todas las activaciones *empeoran* en el banco no visto (0,39-0,44). Un barrido de épocas fijas evaluado en los bancos de test (`python -m src.dl_epoch_sweep`) muestra por qué:
+
+| Épocas (fijas) | GELU | Swish | ReLU |
+|---:|---:|---:|---:|
+| 80 | 0,269 | 0,290 | 0,308 |
+| 200 | 0,260 | 0,268 | 0,338 |
+| hasta converger (early stopping) | 0,437 | 0,392 | 0,443 |
+
+El error en un banco no visto es mínimo en algún punto entre 80 y 200 épocas y después crece, mientras la loss de validación medida en los bancos de entrenamiento sigue mejorando durante cientos de épocas. La red sigue aprendiendo cosas propias de los dos bancos que ve, y una validación tomada de esos mismos bancos no puede detectarlo. Elegir 80 o 200 épocas desde esta tabla sería elegir con el banco de test, así que se reporta la corrida hasta converger y el barrido queda como diagnóstico. Con tres bancos no hay una salida limpia: reservar un banco entero para validación dejaría uno solo para entrenar. Los ensambles de árboles siguen siendo claramente mejores (CatBoost 0,208), y este resultado es la razón por la que son el modelo de referencia aquí.
 
 Las métricas quedan en `outputs/bearing.duckdb` (tabla `dl_metrics`, aditiva a `model_metrics`) y en `outputs/reports/dl_activation_comparison.{csv,json,png}`.
 

@@ -49,7 +49,8 @@ def main() -> None:
     groups = table["experiment"].to_numpy()
 
     print("[2/3] MLP PyTorch: comparando activaciones ReLU / GELU / Swish (loss custom, GroupKFold)...")
-    results = evaluate_activations_group_kfold(X, y, groups, n_splits=3)
+    results = evaluate_activations_group_kfold(X, y, groups, n_splits=3,
+                                               checkpoint_dir=ROOT / "outputs" / "models" / "checkpoints")
     results.insert(0, "target", "rul_fraction")
     print("\n=== MAE (fraccion de vida) por activacion ===")
     print(results.to_string(index=False))

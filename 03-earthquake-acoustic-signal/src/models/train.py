@@ -69,9 +69,10 @@ def run_cnn_cv(
 ) -> tuple[np.ndarray, float]:
     """Entrena la CNN 1D en cada fold sobre la senal cruda submuestreada."""
     oof_preds = np.zeros_like(y)
-    for train_idx, val_idx in splits:
+    for fold, (train_idx, val_idx) in enumerate(splits):
         _model, _ = train_cnn_model(
-            raw_signals[train_idx], y[train_idx], raw_signals[val_idx], y[val_idx], config=config
+            raw_signals[train_idx], y[train_idx], raw_signals[val_idx], y[val_idx], config=config,
+            checkpoint_path=MODELS_DIR / "checkpoints" / f"cnn_fold{fold}.ckpt",
         )
         oof_preds[val_idx] = predict_cnn(_model, raw_signals[val_idx])
     mae = mean_absolute_error(y, oof_preds)

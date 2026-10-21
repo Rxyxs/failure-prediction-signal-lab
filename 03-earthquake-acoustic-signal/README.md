@@ -154,7 +154,7 @@ not a claim about performance on the real Kaggle dataset.
 | LightGBM (Optuna-tuned)  | 1.6891             |
 | Random Forest            | 1.7483             |
 | Ridge                    | 3.9732             |
-| 1D CNN (raw waveform)    | 4.5085             |
+| 1D CNN (raw waveform)    | 4.1817             |
 | Lasso                    | 4.6207             |
 
 Full results are persisted at `reports/mae_report.csv` and `reports/training_report.json` after
@@ -163,13 +163,29 @@ every pipeline run, including the per-fold MAE and the Optuna-selected hyperpara
 ### Activation function comparison (1D CNN, weighted Huber loss)
 
 Same synthetic dataset, `python -m scripts.run_activation_experiment` (18 training / 6 validation
-segments, 6 epochs, `WeightedHuberLoss`):
+segments, `WeightedHuberLoss`):
 
-| Activation    | Validation MAE |
-|---------------|-----------------|
-| **ReLU**      | **2.4066**      |
-| GELU          | 2.4856          |
-| Swish (SiLU)  | 2.6823          |
+| Activation    | Validation MAE | Best epoch |
+|---------------|----------------|-----------:|
+| **ReLU**      | **4.2055**     | 103 |
+| GELU          | 4.3933         | 120 |
+| Swish (SiLU)  | 4.5951         | 125 |
+
+**Training protocol.** Every CNN in the project (the cross-validated one in the table above and
+this ablation) trains through one shared loop, `cnn_model.fit_with_early_stopping`: the last 15% of
+the training segments, in time order, is held out for early stopping, and the evaluation segments
+are never looked at during training. Each network trains at least 100 epochs (at most 300); after
+that, early stopping ends the run after 15 epochs without improvement and restores the best epoch.
+The full state is checkpointed every epoch, so an interrupted run resumes.
+
+The two runs moved in opposite directions. In cross-validation (about 30 training segments per
+fold) the CNN improves from MAE 4.51 with the previous fixed 8 epochs to 4.18. In this ablation,
+with only 18 training segments and early stopping judged on 2 of them, every activation gets worse
+than the previous fixed 6-epoch run (ReLU 2.41 → 4.21): after 6 epochs the network barely moved
+away from predicting close to the average, which happened to score well on 6 validation segments,
+and with more training it fits the 16 segments it learns from. On this little data the ablation
+cannot rank the activations reliably, and none of the CNN results changes the conclusion that
+gradient boosting on engineered features is the right model here.
 
 Full metrics (including per-epoch training loss) are persisted at `reports/activation_experiment.json`
 and in the `activation_experiment` table of `data/processed/features.duckdb`.
@@ -257,7 +273,7 @@ boosting on hand-engineered tabular features (rolling statistics, spectral energ
 autocorrelation, peak counts) captures the precursor structure far more efficiently than a linear
 model can (Ridge/Lasso plateau around MAE 4, since the relationship between raw signal statistics
 and `time_to_failure` is highly non-linear), and more efficiently than the 1D CNN can with the
-amount of data available here (MAE 4.5) — a small convolutional network needs many more labeled
+amount of data available here (MAE 4.2) — a small convolutional network needs many more labeled
 cycles than 40 synthetic segments to learn a useful representation directly from the raw waveform
 instead of overfitting noise. The optimization step mattered in practice, not just cosmetically:
 the ensemble's NNLS solver assigned essentially zero weight to Lasso, Random Forest and the CNN on

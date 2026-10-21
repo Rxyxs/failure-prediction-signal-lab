@@ -24,7 +24,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from src.config import FEATURES_DB_PATH, REPORTS_DIR, SyntheticConfig, TrainingConfig, ensure_directories
+from src.config import MODELS_DIR, FEATURES_DB_PATH, REPORTS_DIR, SyntheticConfig, TrainingConfig, ensure_directories
 from src.data.synthetic import generate_synthetic_dataset
 from src.features.build_features import save_dataframe_to_duckdb
 from src.features.windowing import create_windows
@@ -39,7 +39,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Comparacion de activaciones para la CNN 1D.")
     parser.add_argument("--n-segments", type=int, default=24, help="Numero de segmentos sinteticos a generar.")
     parser.add_argument("--segment-size", type=int, default=150_000, help="Tamano de cada segmento.")
-    parser.add_argument("--cnn-epochs", type=int, default=6, help="Numero de epocas de entrenamiento por activacion.")
+    parser.add_argument("--cnn-epochs", type=int, default=None,
+                        help="Maximo de epocas por activacion (por defecto el de TrainingConfig; early stopping corta antes).")
     parser.add_argument("--val-fraction", type=float, default=0.25, help="Fraccion de segmentos usados para validacion.")
     return parser.parse_args(argv)
 
@@ -53,7 +54,7 @@ def main(argv: list[str] | None = None) -> None:
     raw_df = generate_synthetic_dataset(synthetic_config)
     windows = create_windows(raw_df, segment_size=args.segment_size)
 
-    training_config = TrainingConfig(cnn_epochs=args.cnn_epochs)
+    training_config = TrainingConfig() if args.cnn_epochs is None else TrainingConfig(cnn_epochs=args.cnn_epochs)
     signals = np.stack(
         [subsample_signal(w["signal"], training_config.cnn_subsample) for w in windows]
     )
@@ -64,7 +65,10 @@ def main(argv: list[str] | None = None) -> None:
     train_targets, val_targets = targets[:-n_val], targets[-n_val:]
 
     print(f"Entrenando CNN 1D con {len(train_signals)} segmentos (train) y {len(val_signals)} (val) ...")
-    results = run_activation_comparison(train_signals, train_targets, val_signals, val_targets, training_config)
+    results = run_activation_comparison(train_signals, train_targets, val_signals, val_targets, training_config,
+                                        checkpoint_dir=MODELS_DIR / "checkpoints" / "activation_experiment")
+    for name, r in results.items():
+        print(f"  {name}: mejor epoca {r.best_epoch} de {len(r.epoch_losses)}, MAE {r.val_mae:.3f}")
 
     mae_by_activation = {name: r.val_mae for name, r in results.items()}
     epoch_losses_by_activation = {name: r.epoch_losses for name, r in results.items()}
@@ -74,6 +78,9 @@ def main(argv: list[str] | None = None) -> None:
         "epoch_losses_by_activation": epoch_losses_by_activation,
         "loss": "WeightedHuberLoss",
         "cnn_epochs": training_config.cnn_epochs,
+        "cnn_min_epochs": training_config.cnn_min_epochs,
+        "best_epoch_by_activation": {name: r.best_epoch for name, r in results.items()},
+        "epochs_run_by_activation": {name: len(r.epoch_losses) for name, r in results.items()},
         "n_train_segments": len(train_signals),
         "n_val_segments": len(val_signals),
     }

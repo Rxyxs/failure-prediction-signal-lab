@@ -54,7 +54,10 @@ class TrainingConfig:
 
     n_splits: int = 5
     random_seed: int = 42
-    cnn_epochs: int = 8
+    cnn_epochs: int = 300  # maximo; el early stopping corta antes
+    cnn_min_epochs: int = 100  # ninguna red se detiene antes de 100 epocas
+    cnn_patience: int = 15
+    cnn_val_fraction: float = 0.15  # tramo final (temporal) del train usado para early stopping
     cnn_batch_size: int = 16
     cnn_learning_rate: float = 1e-3
     cnn_subsample: int = 6000  # puntos submuestreados de cada segmento para la CNN 1D

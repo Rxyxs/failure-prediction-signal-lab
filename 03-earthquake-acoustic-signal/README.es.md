@@ -163,7 +163,7 @@ de la mecanica del pipeline, no una afirmacion de desempeno sobre el dataset rea
 | LightGBM (optimizado)         | 1.6891             |
 | Random Forest                 | 1.7483             |
 | Ridge                         | 3.9732             |
-| CNN 1D (forma de onda cruda)  | 4.5085             |
+| CNN 1D (forma de onda cruda)  | 4.1817             |
 | Lasso                         | 4.6207             |
 
 Los resultados completos se guardan en `reports/mae_report.csv` y `reports/training_report.json`
@@ -173,13 +173,31 @@ por Optuna.
 ### Comparacion de activaciones (CNN 1D, loss Huber ponderada)
 
 Mismo dataset sintetico, `python -m scripts.run_activation_experiment` (18 segmentos de
-entrenamiento / 6 de validacion, 6 epocas, `WeightedHuberLoss`):
+entrenamiento / 6 de validacion, `WeightedHuberLoss`):
 
-| Activacion    | MAE de validacion |
-|---------------|--------------------|
-| **ReLU**      | **2.4066**         |
-| GELU          | 2.4856             |
-| Swish (SiLU)  | 2.6823             |
+| Activacion    | MAE de validacion | Mejor epoca |
+|---------------|-------------------|------------:|
+| **ReLU**      | **4.2055**        | 103 |
+| GELU          | 4.3933            | 120 |
+| Swish (SiLU)  | 4.5951            | 125 |
+
+**Protocolo de entrenamiento.** Todas las CNN del proyecto (la de validacion cruzada de la tabla de
+arriba y esta ablacion) entrenan con un mismo loop, `cnn_model.fit_with_early_stopping`: el ultimo
+15% de los segmentos de entrenamiento, en orden temporal, se reserva para el early stopping, y los
+segmentos de evaluacion nunca se miran durante el entrenamiento. Cada red entrena al menos 100
+epocas (maximo 300); desde ahi, early stopping corta tras 15 epocas sin mejora y restaura la mejor
+epoca. El estado completo se guarda en un checkpoint cada epoca, asi que una corrida interrumpida
+retoma donde quedo.
+
+Las dos corridas se movieron en direcciones opuestas. En validacion cruzada (unos 30 segmentos de
+entrenamiento por fold) la CNN mejora de MAE 4,51 con las 8 epocas fijas anteriores a 4,18. En esta
+ablacion, con solo 18 segmentos de entrenamiento y el early stopping juzgado sobre 2 de ellos,
+todas las activaciones empeoran frente a la corrida anterior de 6 epocas fijas (ReLU 2,41 → 4,21):
+tras 6 epocas la red apenas se habia alejado de predecir cerca del promedio, lo que casualmente
+puntuaba bien en 6 segmentos de validacion, y con mas entrenamiento se ajusta a los 16 segmentos
+con que aprende. Con tan pocos datos la ablacion no puede ordenar las activaciones de forma
+confiable, y ningun resultado de la CNN cambia la conclusion de que gradient boosting sobre
+features construidas es el modelo correcto aqui.
 
 Las metricas completas (incluyendo la loss de entrenamiento por epoca) se guardan en
 `reports/activation_experiment.json` y en la tabla `activation_experiment` de
@@ -269,7 +287,7 @@ rodantes, energia espectral, entropia, autocorrelacion, conteo de picos) captura
 precursora de forma mucho mas eficiente que un modelo lineal (Ridge/Lasso se estancan alrededor de
 MAE 4, ya que la relacion entre las estadisticas de la senal cruda y `time_to_failure` es
 fuertemente no lineal), y de forma mas eficiente que la CNN 1D con la cantidad de datos disponible
-aqui (MAE 4.5) — una red convolucional pequena necesita muchos mas ciclos etiquetados que los 40
+aqui (MAE 4.2) — una red convolucional pequena necesita muchos mas ciclos etiquetados que los 40
 segmentos sinteticos usados para aprender una representacion util directamente de la forma de onda
 cruda, en vez de sobreajustarse al ruido. La optimizacion importo en la practica, no solo de forma
 cosmetica: el solver NNLS del ensamble asigno un peso practicamente nulo a Lasso, Random Forest y
