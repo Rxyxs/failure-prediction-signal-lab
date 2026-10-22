@@ -587,30 +587,38 @@ where validation loss bottoms out, frame by frame.
 
 Everything above is measured on the synthetic CAEX fleet, where the multi-task network ties LightGBM on RUL (503-530 h against 525.7 h depending on the activation). `src/real_scania.py` asks whether sharing one network between remaining life and failure class pays off on real data: **SCANIA Component X** (Scientific Data, 2025; researchdata.se 2024-34, CC BY 4.0), 23,550 real heavy trucks, 2,272 of which had component X repaired during the study, with 105 anonymised operational counters read at irregular times.
 
-Same features for both approaches (every counter divided by the truck's age, its age, how many readouts so far, and the 8 specifications), the same vehicle split (70% fit, 10% early stopping, 20% held out), and:
+Both approaches share the vehicle split (70% fit, 10% early stopping, 20% held out) and run on **two feature sets**, each with the 8 specifications:
+
+- **rates** (107 features): every counter divided by the truck's age, its age, and how many readouts so far;
+- **scale-invariant** (204 features): the share of each histogram bin in its histogram, and the rate over the last 5 readouts divided by the lifetime rate, plus age and readout count.
+
+The second set exists because the dataset multiplies every variable by a factor that differs between the training and the validation split, a problem found in [heavy-truck-predictive-maintenance](https://github.com/Rxyxs/heavy-truck-predictive-maintenance). A LightGBM trained to tell training readouts from validation readouts separates them perfectly on rates (AUC 1.00) and much less well on the invariant set (0.79). Rates carry the factor; fractions and ratios cancel it.
 
 - **separate LightGBM models**: a 5-class classifier on the official remaining-time windows (>48, 24-48, 12-24, 6-12, 0-6 time units) and a regressor for remaining time;
 - **one multi-task network** with the trunk and heads of `MultiTaskDegradationNet` (two hidden layers of 64, BatchNorm, dropout 0.2) and this module's protocol: at least 100 epochs, early stopping on validation loss (patience 15), best epoch restored. Remaining time is only known for repaired trucks, so its loss is masked for censored ones.
 
 The class is scored on the **official validation set** (5,046 trucks, one readout each, 136 failing) with the official cost matrix, choosing the action of minimum expected cost; remaining time on the readouts of held-out repaired trucks.
 
-| | Separate LightGBM | Multi-task network |
-|---|---:|---:|
-| Official cost (recommend nothing: 57,400) | **47,352** | 52,451 |
-| AUC, "any risk" | **0.647** | 0.549 |
-| Failing trucks that get an alarm | 125 of 136 | 22 of 136 |
-| Healthy trucks that get an alarm | 3,765 of 4,910 | 460 of 4,910 |
-| Remaining-time MAE, all readouts (median baseline 64.9) | **45.2** | 50.1 |
-| Remaining-time MAE, last 48 time units (median baseline 81.7) | **30.3** | 34.3 |
+| | LightGBM, rates | Network, rates | LightGBM, scale-invariant | Network, scale-invariant |
+|---|---:|---:|---:|---:|
+| Official cost (recommend nothing: 57,400) | 47,352 | 52,073 | **40,408** | 49,764 |
+| AUC, "any risk" | 0.647 | 0.571 | **0.710** | 0.625 |
+| Mean predicted risk (observed: 2.7%) | 26.8% | 2.4% | 3.8% | 3.5% |
+| Failing trucks that get an alarm (of 136) | 125 | 48 | 77 | 61 |
+| Healthy trucks that get an alarm (of 4,910) | 3,765 | 1,346 | 1,189 | 1,543 |
+| Remaining-time MAE, all readouts (median baseline 64.9) | **45.2** | 49.4 | **45.2** | 51.0 |
+| Remaining-time MAE, last 48 time units (median baseline 81.7) | **30.3** | 32.7 | **30.3** | 35.6 |
 
-(The network stopped at epoch 113 and restored epoch 98. One run, seed 42.)
+(The network ran 100 epochs and restored epoch 72 on rates, and ran 126 and restored 111 on the invariant set. One run per set, seed 42.)
 
-- **On real trucks the shared network loses on both tasks.** The tie on the synthetic fleet does not carry over: LightGBM is better on remaining time (45.2 against 50.1) and much better at ranking risk (AUC 0.647 against 0.549).
-- **The network's probabilities make it nearly silent.** It alarms 22 of 136 failing trucks, so the expected-cost rule saves less than half of what LightGBM saves.
-- **Features matter more than the architecture.** The [heavy-truck-predictive-maintenance](https://github.com/Rxyxs/heavy-truck-predictive-maintenance) repo, on the same data with 407 history-aware features, reaches a validation cost of 41,141 and an AUC of 0.709, better than either model here with 107 simpler features.
+![The same two models on two feature sets](outputs/reports/real_scania_feature_sets.png)
+
+- **The scale of the validation split was the first problem.** On rates, LightGBM predicts a mean risk of 26.8% for a 2.7% failure rate and alarms 77% of healthy trucks. With the invariant features its predicted risk is 3.8%, it alarms 24% of healthy trucks, and the official cost falls from 47,352 to 40,408 (AUC 0.647 → 0.710).
+- **The network improves too, and still loses.** Its AUC goes from 0.571 to 0.625 and its cost from 52,073 to 49,764, but LightGBM is better on both tasks with either feature set. The tie on the synthetic fleet does not carry over to real trucks: the scale shift explained part of the gap, not all of it.
+- **Remaining time does not move** (45.2 with both sets for LightGBM). That model leans on the truck's age and configuration (`time_step` and `Spec_7` carry 58% of its gain), and it is scored on held-out trucks of the training split, which share one scale.
 
 ```bash
-# ~1.4 GB into data/raw/scania (gitignored), then about 2 minutes on CPU
+# ~1.4 GB into data/raw/scania (gitignored), then about 11 minutes on CPU (both feature sets)
 python -m src.real_scania --dir data/raw/scania
 ```
 

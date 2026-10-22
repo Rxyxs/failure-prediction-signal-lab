@@ -2,27 +2,63 @@
   "validation_trucks": 5046,
   "validation_failing": 136,
   "recommend_nothing_cost": 57400,
-  "lightgbm_separate": {
-    "validation_cost_min_expected": 47352,
-    "validation_any_risk_auc": 0.6468,
-    "failing_trucks_alarmed": 125,
-    "healthy_trucks_alarmed": 3765,
-    "rul_mae_all_readouts": 45.2,
-    "rul_mae_last_48": 30.3
+  "feature_sets": {
+    "rates": {
+      "n_features": 107,
+      "lightgbm_separate": {
+        "validation_cost_min_expected": 47352,
+        "validation_any_risk_auc": 0.6468,
+        "mean_predicted_risk": 0.2675,
+        "failing_trucks_alarmed": 125,
+        "healthy_trucks_alarmed": 3765,
+        "rul_mae_all_readouts": 45.2,
+        "rul_mae_last_48": 30.3
+      },
+      "multitask_network": {
+        "validation_cost_min_expected": 52073,
+        "validation_any_risk_auc": 0.5711,
+        "mean_predicted_risk": 0.0242,
+        "failing_trucks_alarmed": 48,
+        "healthy_trucks_alarmed": 1346,
+        "rul_mae_all_readouts": 49.4,
+        "rul_mae_last_48": 32.7,
+        "epochs_run": 100,
+        "best_epoch": 72
+      },
+      "rul_median_baseline": {
+        "rul_mae_all_readouts": 64.9,
+        "rul_mae_last_48": 81.7
+      },
+      "adversarial_auc_train_vs_validation": 1.0
+    },
+    "scale_invariant": {
+      "n_features": 204,
+      "lightgbm_separate": {
+        "validation_cost_min_expected": 40408,
+        "validation_any_risk_auc": 0.71,
+        "mean_predicted_risk": 0.0376,
+        "failing_trucks_alarmed": 77,
+        "healthy_trucks_alarmed": 1189,
+        "rul_mae_all_readouts": 45.2,
+        "rul_mae_last_48": 30.3
+      },
+      "multitask_network": {
+        "validation_cost_min_expected": 49764,
+        "validation_any_risk_auc": 0.6249,
+        "mean_predicted_risk": 0.035,
+        "failing_trucks_alarmed": 61,
+        "healthy_trucks_alarmed": 1543,
+        "rul_mae_all_readouts": 51.0,
+        "rul_mae_last_48": 35.6,
+        "epochs_run": 126,
+        "best_epoch": 111
+      },
+      "rul_median_baseline": {
+        "rul_mae_all_readouts": 64.9,
+        "rul_mae_last_48": 81.7
+      },
+      "adversarial_auc_train_vs_validation": 0.794
+    }
   },
-  "multitask_network": {
-    "validation_cost_min_expected": 52451,
-    "validation_any_risk_auc": 0.5489,
-    "failing_trucks_alarmed": 22,
-    "healthy_trucks_alarmed": 460,
-    "rul_mae_all_readouts": 50.1,
-    "rul_mae_last_48": 34.3,
-    "epochs_run": 113,
-    "best_epoch": 98
-  },
-  "rul_median_baseline": {
-    "rul_mae_all_readouts": 64.9,
-    "rul_mae_last_48": 81.7
-  },
-  "elapsed_seconds": 108.4
+  "elapsed_seconds": 657.7
 }
