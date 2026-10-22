@@ -614,30 +614,38 @@ etiqueta donde la perdida de validacion toca su minimo, cuadro a cuadro.
 
 Todo lo anterior está medido sobre la flota sintética de CAEX, donde la red multi-task empata con LightGBM en RUL (503-530 h contra 525,7 h según la activación). `src/real_scania.py` pregunta si compartir una red entre vida remanente y clase de falla sirve con datos reales: **SCANIA Component X** (Scientific Data, 2025; researchdata.se 2024-34, CC BY 4.0), 23.550 camiones pesados reales, 2.272 de los cuales tuvieron una reparación del componente X durante el estudio, con 105 contadores operacionales anonimizados leídos a intervalos irregulares.
 
-Mismas variables para ambos enfoques (cada contador dividido por la edad del camión, su edad, cuántas lecturas lleva y las 8 especificaciones), la misma partición por camión (70% ajuste, 10% early stopping, 20% reservado), y:
+Ambos enfoques usan la misma partición por camión (70% ajuste, 10% early stopping, 20% reservado) y corren sobre **dos conjuntos de variables**, cada uno con las 8 especificaciones:
+
+- **tasas** (107 variables): cada contador dividido por la edad del camión, su edad y cuántas lecturas lleva;
+- **invariantes a la escala** (204 variables): la fracción de cada bin en su histograma, y la tasa de las últimas 5 lecturas dividida por la tasa de toda la vida, más la edad y la cantidad de lecturas.
+
+El segundo conjunto existe porque el dataset multiplica cada variable por un factor que cambia entre el conjunto de entrenamiento y el de validación, un problema encontrado en [heavy-truck-predictive-maintenance](https://github.com/Rxyxs/heavy-truck-predictive-maintenance). Un LightGBM entrenado para distinguir lecturas de entrenamiento de lecturas de validación las separa perfectamente con las tasas (AUC 1,00) y mucho menos con el conjunto invariante (0,79). Las tasas heredan el factor; las fracciones y los cocientes lo cancelan.
 
 - **modelos LightGBM separados**: un clasificador de 5 clases sobre las ventanas oficiales de tiempo restante (>48, 24-48, 12-24, 6-12, 0-6 unidades) y un regresor de tiempo restante;
 - **una red multi-task** con el tronco y las cabezas de `MultiTaskDegradationNet` (dos capas ocultas de 64, BatchNorm, dropout 0,2) y el protocolo de este módulo: al menos 100 épocas, early stopping sobre la pérdida de validación (paciencia 15), restaurando la mejor época. El tiempo restante solo se conoce para los camiones reparados, así que su pérdida se enmascara en los censurados.
 
 La clase se evalúa sobre el **set de validación oficial** (5.046 camiones, una lectura cada uno, 136 con falla) con la matriz de costo oficial, eligiendo la acción de mínimo costo esperado; el tiempo restante, sobre las lecturas de los camiones reparados reservados.
 
-| | LightGBM separados | Red multi-task |
-|---|---:|---:|
-| Costo oficial (no recomendar nada: 57.400) | **47.352** | 52.451 |
-| AUC, "algún riesgo" | **0,647** | 0,549 |
-| Camiones con falla que reciben alarma | 125 de 136 | 22 de 136 |
-| Camiones sanos que reciben alarma | 3.765 de 4.910 | 460 de 4.910 |
-| MAE de tiempo restante, todas las lecturas (baseline mediana 64,9) | **45,2** | 50,1 |
-| MAE de tiempo restante, últimas 48 unidades (baseline mediana 81,7) | **30,3** | 34,3 |
+| | LightGBM, tasas | Red, tasas | LightGBM, invariantes | Red, invariantes |
+|---|---:|---:|---:|---:|
+| Costo oficial (no recomendar nada: 57.400) | 47.352 | 52.073 | **40.408** | 49.764 |
+| AUC, "algún riesgo" | 0,647 | 0,571 | **0,710** | 0,625 |
+| Riesgo medio predicho (observado: 2,7%) | 26,8% | 2,4% | 3,8% | 3,5% |
+| Camiones con falla que reciben alarma (de 136) | 125 | 48 | 77 | 61 |
+| Camiones sanos que reciben alarma (de 4.910) | 3.765 | 1.346 | 1.189 | 1.543 |
+| MAE de tiempo restante, todas las lecturas (baseline mediana 64,9) | **45,2** | 49,4 | **45,2** | 51,0 |
+| MAE de tiempo restante, últimas 48 unidades (baseline mediana 81,7) | **30,3** | 32,7 | **30,3** | 35,6 |
 
-(La red se detuvo en la época 113 y restauró la 98. Una corrida, semilla 42.)
+(La red corrió 100 épocas y restauró la 72 con las tasas, y corrió 126 y restauró la 111 con el conjunto invariante. Una corrida por conjunto, semilla 42.)
 
-- **Con camiones reales la red compartida pierde en ambas tareas.** El empate de la flota sintética no se traslada: LightGBM es mejor en tiempo restante (45,2 contra 50,1) y bastante mejor ordenando el riesgo (AUC 0,647 contra 0,549).
-- **Las probabilidades de la red la dejan casi muda.** Alarma a 22 de 136 camiones con falla, así que la regla de mínimo costo esperado ahorra menos de la mitad de lo que ahorra LightGBM.
-- **Las variables pesan más que la arquitectura.** El repo [heavy-truck-predictive-maintenance](https://github.com/Rxyxs/heavy-truck-predictive-maintenance), sobre los mismos datos con 407 variables que usan la historia del camión, llega a un costo de validación de 41.141 y un AUC de 0,709, mejor que ambos modelos de acá con 107 variables más simples.
+![Los mismos dos modelos con dos conjuntos de variables](outputs/reports/real_scania_feature_sets.png)
+
+- **La escala del conjunto de validación era el primer problema.** Con las tasas, LightGBM predice un riesgo medio de 26,8% para una tasa de falla de 2,7% y alarma al 77% de los camiones sanos. Con las variables invariantes su riesgo predicho es 3,8%, alarma al 24% de los sanos y el costo oficial baja de 47.352 a 40.408 (AUC 0,647 → 0,710).
+- **La red también mejora, y sigue perdiendo.** Su AUC pasa de 0,571 a 0,625 y su costo de 52.073 a 49.764, pero LightGBM es mejor en ambas tareas con cualquiera de los dos conjuntos. El empate de la flota sintética no se traslada a camiones reales: el cambio de escala explicaba parte de la brecha, no toda.
+- **El tiempo restante no se mueve** (45,2 con ambos conjuntos para LightGBM). Ese modelo se apoya en la edad y la configuración del camión (`time_step` y `Spec_7` concentran el 58% de su ganancia), y se evalúa en camiones reservados del conjunto de entrenamiento, que comparten una sola escala.
 
 ```bash
-# ~1,4 GB en data/raw/scania (en el gitignore), después unos 2 minutos en CPU
+# ~1,4 GB en data/raw/scania (en el gitignore), después unos 11 minutos en CPU (ambos conjuntos)
 python -m src.real_scania --dir data/raw/scania
 ```
 
