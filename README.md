@@ -20,6 +20,7 @@ Every number comes from an actual run of that folder's pipeline. The three share
 |---|---|---|---|
 | **01** | Mining fleet (synthetic) | CoxPH C-Index **0.6246**; RUL MAE **513 h** over cycles up to ~16,700 h | Weeks of lead time, not a last-minute alarm. The survival model ranks the whole fleet **including units that haven't failed yet** (censored), which point predictions on failed units alone can't do |
 | **01** | — same folder | Failure-type accuracy **1.000** at the last reading, **0.744** across every reading | The same classifier, two evaluation protocols, a 0.26 gap. Scoring only the final reading before failure is the easy question; scoring every reading in the cycle is the one an operator actually faces |
+| **01** | — real trucks (SCANIA Component X) | Official cost **47,352** (LightGBM) vs. **52,451** (multi-task net); doing nothing: 57,400 | On 23,550 real trucks the shared network loses on both tasks (AUC 0.647 vs. 0.549, RUL MAE 45.2 vs. 50.1), though it tied on the synthetic fleet |
 | **02** | Bearing vibration (**real** NASA IMS) | MAE **14,776 min → 0.216** of remaining life | Not a modeling win — a **target-definition** win. See below |
 | **02** | — same folder | Optuna, 30 trials: 0.2159 → **0.2080** (3.7%) | Disclosed as modest on purpose: 3 GroupKFold folds, one per physical rig, is a thin signal for hyperparameter search |
 | **03** | Seismic acoustic (LANL) | NNLS ensemble MAE **1.474**; 1D CNN on raw waveform **~4.5** | Gradient boosting on hand-engineered spectral features beats a CNN reading the raw signal by **2.7x**. The feature engineering is the model |
@@ -59,6 +60,7 @@ Three domains — mining fleet telemetry, bearing vibration, seismic acoustics �
 - **The target** (02): redefining it was worth 3–8x. The best hyperparameter search on top of the right target was worth 3.7%.
 - **The features** (03): spectral engineering on the raw signal beat a CNN reading that signal directly, by 2.7x.
 - **The evaluation protocol** (01): the same failure-type classifier reports 1.000 or 0.744 depending on whether you score the last reading or every reading.
+- **The data** (01): the multi-task network that ties LightGBM on the synthetic fleet loses to it on both tasks on real SCANIA trucks, and richer features in another repo beat both.
 
 That is also why the three live in one repo. The domains sound unrelated — haul trucks, bearings, earthquakes — but the toolkit is the same: spectral and statistical feature engineering feeding gradient-boosted survival and regression models, validated with a grouping that respects the physical independence of each rig, run, or unit.
 

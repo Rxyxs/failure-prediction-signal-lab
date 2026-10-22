@@ -9,9 +9,16 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - 01-mining-fleet-multitask-rul
+          - 02-bearing-vibration-rul
+          - 03-earthquake-acoustic-signal
     defaults:
       run:
-        working-directory: 02-bearing-vibration-rul
+        working-directory: ${{ matrix.module }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +32,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt
+          pip install -r requirements.txt pytest
+
+      # 01's API tests load the generated fleet and the trained models, which are not versioned.
+      - name: Build 01's data and models for the API tests
+        if: matrix.module == '01-mining-fleet-multitask-rul'
+        run: |
+          python -m src.data.mining_data_generator
+          python -m src.features.engineering
+          python -m src.models.train_survival_pipeline
+          python multitask_pdm.py
 
       - name: Run test suite
         run: pytest tests/ -q
