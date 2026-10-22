@@ -20,6 +20,7 @@ Todos los números provienen de una corrida real del pipeline de esa carpeta. Lo
 |---|---|---|---|
 | **01** | Flota minera (sintético) | C-Index de CoxPH **0,6246**; MAE de RUL **513 h** sobre ciclos de hasta ~16.700 h | Semanas de anticipación, no una alarma de último minuto. El modelo de supervivencia rankea toda la flota **incluyendo unidades que todavía no fallaron** (censuradas), algo que las predicciones puntuales sobre unidades falladas no pueden hacer |
 | **01** | — misma carpeta | Accuracy de tipo de falla **1,000** en la última lectura, **0,744** sobre todas las lecturas | El mismo clasificador, dos protocolos de evaluación, 0,26 de diferencia. Puntuar solo la lectura final antes de la falla es la pregunta fácil; puntuar cada lectura del ciclo es la que enfrenta un operador |
+| **01** | — camiones reales (SCANIA Component X) | Costo oficial **47.352** (LightGBM) vs. **52.451** (red multi-task); no hacer nada: 57.400 | Con 23.550 camiones reales la red compartida pierde en ambas tareas (AUC 0,647 vs. 0,549, MAE de RUL 45,2 vs. 50,1), aunque empataba en la flota sintética |
 | **02** | Vibración de rodamientos (**real**, NASA IMS) | MAE **14.776 min → 0,216** de vida restante | No es un triunfo de modelado — es un triunfo de **definición del target**. Ver abajo |
 | **02** | — misma carpeta | Optuna, 30 trials: 0,2159 → **0,2080** (3,7%) | Declarado modesto a propósito: 3 folds de GroupKFold, uno por banco físico, es una señal delgada para búsqueda de hiperparámetros |
 | **03** | Acústica sísmica (LANL) | MAE del ensemble NNLS **1,474**; CNN 1D sobre señal cruda **~4,5** | El gradient boosting sobre features espectrales construidas a mano le gana **2,7x** a una CNN que lee la señal cruda. La ingeniería de features *es* el modelo |
@@ -59,6 +60,7 @@ Tres dominios — telemetría de flota minera, vibración de rodamientos, acúst
 - **El target** (02): redefinirlo valió 3–8x. La mejor búsqueda de hiperparámetros encima del target correcto valió 3,7%.
 - **Las features** (03): la ingeniería espectral sobre la señal cruda le ganó 2,7x a una CNN que leía esa misma señal directamente.
 - **El protocolo de evaluación** (01): el mismo clasificador de tipo de falla reporta 1,000 o 0,744 según si se puntúa la última lectura o todas.
+- **Los datos** (01): la red multi-task que empata con LightGBM en la flota sintética pierde en ambas tareas con camiones SCANIA reales, y variables más ricas en otro repo les ganan a ambos.
 
 Esa es también la razón por la que los tres viven en un solo repo. Los dominios suenan inconexos — camiones de extracción, rodamientos, terremotos — pero el toolkit es el mismo: ingeniería de features espectrales y estadísticas alimentando modelos de supervivencia y regresión con gradient boosting, validados con un agrupamiento que respeta la independencia física de cada banco, corrida o unidad.
 

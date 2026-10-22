@@ -11,8 +11,8 @@
 ![SHAP](https://img.shields.io/badge/SHAP-explainability-8A2BE2?style=flat)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?style=flat&logo=fastapi&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.31%2B-FF4B4B?style=flat&logo=streamlit&logoColor=white)
-![Pytest](https://img.shields.io/badge/tests-47%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
-![License](https://img.shields.io/badge/status-investigacion%20%2F%20datos%20sinteticos-lightgrey?style=flat)
+![Pytest](https://img.shields.io/badge/tests-51%20passing-brightgreen?style=flat&logo=pytest&logoColor=white)
+![Datos](https://img.shields.io/badge/datos-sint%C3%A9ticos%20%2B%20comparaci%C3%B3n%20real%20SCANIA-lightgrey?style=flat)
 
 ## Resumen ejecutivo
 
@@ -107,7 +107,7 @@ es consultable.
 | API y serving | **FastAPI + slowapi** | Servicio de scoring de riesgo de flota con auth por API key y rate-limiting por IP |
 | Dashboard | **Streamlit + Plotly** | Dashboard de telemetria de flota en tiempo real con heatmap de riesgo por equipo |
 | Persistencia de metricas | **DuckDB** | Almacen local consultable con SQL para las metricas comparativas de CoxPH/LightGBM/PyTorch y la ablacion de activaciones |
-| Testing | **Pytest + httpx** | 47 tests que cubren integridad de datos, feature engineering, contratos de modelos, atribucion DeepSHAP y auth de la API |
+| Testing | **Pytest + httpx** | 51 tests que cubren integridad de datos, feature engineering, contratos de modelos, atribucion DeepSHAP y auth de la API |
 
 ## 📁 Estructura del proyecto
 
@@ -413,7 +413,7 @@ atribucion **DeepSHAP** en vivo por cabeza (RUL, tipo de falla) para la
 pytest
 ```
 
-47 tests: integridad del esquema relacional sintetico y consistencia de la
+51 tests: integridad del esquema relacional sintetico y consistencia de la
 censura, ausencia de fuga en el feature engineering (nulos de warm-up de
 rolling/FFT), rango valido de C-Index/MAE/Accuracy, contrato del modulo de
 scoring compartido (`FleetScorer`), entrenamiento de la red multi-task,
@@ -609,6 +609,37 @@ etiqueta donde la perdida de validacion toca su minimo, cuadro a cuadro.
 | ALTO (< 1 mes) | 44 | 8.5% |
 | MEDIO (< 3 meses) | 65 | 12.5% |
 | BAJO (3+ meses) | 240 | 46.2% |
+
+## 🚚 La idea multi-task sobre camiones reales: SCANIA Component X
+
+Todo lo anterior está medido sobre la flota sintética de CAEX, donde la red multi-task empata con LightGBM en RUL (503-530 h contra 525,7 h según la activación). `src/real_scania.py` pregunta si compartir una red entre vida remanente y clase de falla sirve con datos reales: **SCANIA Component X** (Scientific Data, 2025; researchdata.se 2024-34, CC BY 4.0), 23.550 camiones pesados reales, 2.272 de los cuales tuvieron una reparación del componente X durante el estudio, con 105 contadores operacionales anonimizados leídos a intervalos irregulares.
+
+Mismas variables para ambos enfoques (cada contador dividido por la edad del camión, su edad, cuántas lecturas lleva y las 8 especificaciones), la misma partición por camión (70% ajuste, 10% early stopping, 20% reservado), y:
+
+- **modelos LightGBM separados**: un clasificador de 5 clases sobre las ventanas oficiales de tiempo restante (>48, 24-48, 12-24, 6-12, 0-6 unidades) y un regresor de tiempo restante;
+- **una red multi-task** con el tronco y las cabezas de `MultiTaskDegradationNet` (dos capas ocultas de 64, BatchNorm, dropout 0,2) y el protocolo de este módulo: al menos 100 épocas, early stopping sobre la pérdida de validación (paciencia 15), restaurando la mejor época. El tiempo restante solo se conoce para los camiones reparados, así que su pérdida se enmascara en los censurados.
+
+La clase se evalúa sobre el **set de validación oficial** (5.046 camiones, una lectura cada uno, 136 con falla) con la matriz de costo oficial, eligiendo la acción de mínimo costo esperado; el tiempo restante, sobre las lecturas de los camiones reparados reservados.
+
+| | LightGBM separados | Red multi-task |
+|---|---:|---:|
+| Costo oficial (no recomendar nada: 57.400) | **47.352** | 52.451 |
+| AUC, "algún riesgo" | **0,647** | 0,549 |
+| Camiones con falla que reciben alarma | 125 de 136 | 22 de 136 |
+| Camiones sanos que reciben alarma | 3.765 de 4.910 | 460 de 4.910 |
+| MAE de tiempo restante, todas las lecturas (baseline mediana 64,9) | **45,2** | 50,1 |
+| MAE de tiempo restante, últimas 48 unidades (baseline mediana 81,7) | **30,3** | 34,3 |
+
+(La red se detuvo en la época 113 y restauró la 98. Una corrida, semilla 42.)
+
+- **Con camiones reales la red compartida pierde en ambas tareas.** El empate de la flota sintética no se traslada: LightGBM es mejor en tiempo restante (45,2 contra 50,1) y bastante mejor ordenando el riesgo (AUC 0,647 contra 0,549).
+- **Las probabilidades de la red la dejan casi muda.** Alarma a 22 de 136 camiones con falla, así que la regla de mínimo costo esperado ahorra menos de la mitad de lo que ahorra LightGBM.
+- **Las variables pesan más que la arquitectura.** El repo [heavy-truck-predictive-maintenance](https://github.com/Rxyxs/heavy-truck-predictive-maintenance), sobre los mismos datos con 407 variables que usan la historia del camión, llega a un costo de validación de 41.141 y un AUC de 0,709, mejor que ambos modelos de acá con 107 variables más simples.
+
+```bash
+# ~1,4 GB en data/raw/scania (en el gitignore), después unos 2 minutos en CPU
+python -m src.real_scania --dir data/raw/scania
+```
 
 ## Interactivo: RUL predicho vs. real
 
